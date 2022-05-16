@@ -1,0 +1,10 @@
+[workspace]
+members = [
+	"rsa-generator",
+	"github",
+	"gmail",
+	"slack",
+	"sendgrid",
+	"linkinq",
+	"csvbox"
+]
