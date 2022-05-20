@@ -12,6 +12,7 @@ use axum::{
 	extract::{Query, Json},
 	response::{IntoResponse},
 	http::{StatusCode},
+	extract::{ContentLengthLimit, Multipart},
 };
 
 lazy_static! {
@@ -274,7 +275,7 @@ struct PostBody {
 	state: String,
 }
 
-async fn post_msg(Json(msg_body): Json<PostBody>) -> impl IntoResponse {
+async fn post_msg(Json(msg_body): Json<PostBody>) -> Result<StatusCode, (StatusCode, &'static str)> {
 	let request = serde_json::json!({
 		"channel": msg_body.user,
 		"text": msg_body.text,
@@ -291,12 +292,88 @@ async fn post_msg(Json(msg_body): Json<PostBody>) -> impl IntoResponse {
 	}
 }
 
+async fn upload_file_to_slack(form: multipart::Form, access_token: String) {
+	let response = new_http_client().post("https://slack.com/api/files.upload")
+		.bearer_auth(decrypt(access_token))
+		.multipart(form)
+		.send()
+		.await;
+	if let Ok(res) = response {
+		if res.status().is_success() {
+			// println!("{:?}", res.text().await);
+		}
+	}
+}
+
+
+async fn upload_msg(ContentLengthLimit(mut multipart): ContentLengthLimit<Multipart, {10 * 1024 * 1024 /* 250mb */},>) -> impl IntoResponse {
+	let mut user = String::new();
+	let mut text = String::new();
+	let mut state = String::new();
+
+	let mut parts = Vec::new();
+	while let Some(field) = multipart.next_field().await.unwrap() {
+		let name = field.name().unwrap().to_string();
+		match name.as_str() {
+			"file" => {
+				let file_name = field.file_name().unwrap().to_string();
+				let content_type = field.content_type().unwrap().to_string();
+				let data = field.bytes().await.unwrap();
+				if let Ok(part) = multipart::Part::bytes(data.to_vec())
+					.file_name(file_name)
+					.mime_str(&content_type) {
+					parts.push(part);
+				}
+			}
+			"user" => {
+				if let Ok(u) = field.text().await {
+					user = u;
+				}
+			}
+			"state" => {
+				if let Ok(s) = field.text().await {
+					state = s;
+				}
+			}
+			"text" => {
+				if let Ok(t) = field.text().await {
+					text = t;
+				}
+			}
+			_ => {}
+		}
+	}
+
+	if user.len() == 0 || state.len() == 0 {
+		return Err((StatusCode::BAD_REQUEST, ""));
+	}
+
+	if parts.len() > 0 {
+		for part in parts.into_iter() {
+			let mut form = multipart::Form::new()
+				.text("channels", user.clone());
+			form = form.part("file", part);
+			upload_file_to_slack(form, state.clone()).await;
+		}
+	}
+
+	if text.len() > 0 {
+		return post_msg(Json::from(PostBody {
+			user: user,
+			state: state,
+			text: text,
+		})).await;
+	} else {
+		return Ok(StatusCode::OK);
+	}
+}
+
 #[tokio::main]
 async fn main() {
 	let app = Router::new()
 		.route("/auth", get(auth))
 		.route("/event", post(capture_event))
-		.route("/post", post(post_msg));
+		.route("/post", post(post_msg).put(upload_msg));
 
 	let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
 	let port = port.parse::<u16>().unwrap();

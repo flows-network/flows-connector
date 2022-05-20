@@ -12,5 +12,5 @@ lazy_static = "1.4.0"
 openssl = "0.10.0"
 hex = "0.4.0"
 reqwest = { version = "0.11", features = ["json", "multipart"] }
-axum = "0.5"
+axum = { version="0.5", features = ["multipart"] }
 tokio = { version = "1", features = ["full"] }
