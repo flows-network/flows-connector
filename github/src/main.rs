@@ -1,12 +1,20 @@
 use std::env;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::net::SocketAddr;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Serialize, Deserialize};
 use serde_json::{json, Value};
-use actix_web::{web, App, body::Body, HttpResponse, HttpServer, ResponseError};
 use lazy_static::lazy_static;
 use openssl::rsa::{Rsa, Padding};
 use openssl::pkey::{Public, Private};
 use jsonwebtoken::{encode, Algorithm, Header, EncodingKey};
+use reqwest::{Client, ClientBuilder};
+use axum::{
+	Router,
+	routing::{get, post, delete},
+	extract::{Query, Json, Form},
+	response::{IntoResponse},
+	http::{StatusCode, header},
+};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct AuthBody {
@@ -16,7 +24,7 @@ struct AuthBody {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct AccessTokenBody {
-	access_token: Option<String>,
+	access_token: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -71,11 +79,9 @@ lazy_static! {
 
 const TIMEOUT: u64 = 120;
 
-fn new_http_client() -> awc::Client {
-	let connector = awc::Connector::new()
-		.timeout(std::time::Duration::from_secs(TIMEOUT))
-		.finish();
-	return awc::ClientBuilder::default().timeout(std::time::Duration::from_secs(TIMEOUT)).connector(connector).finish();
+fn new_http_client() -> Client {
+	let cb = ClientBuilder::new().timeout(Duration::from_secs(TIMEOUT));
+	return cb.build().unwrap();
 }
 
 fn get_now() -> u64 {
@@ -98,13 +104,13 @@ fn decrypt(hex: &str) -> String {
 	String::from_utf8(buf[..l].to_vec()).unwrap()
 }
 
-async fn auth<'a>(auth_body: web::Query<AuthBody>) -> HttpResponse {
+async fn auth(Query(auth_body): Query<AuthBody>) -> impl IntoResponse {
 	if auth_body.code.eq("") {
-		HttpResponse::BadRequest().body("No code")
+		Err((StatusCode::BAD_REQUEST, "No code".to_string()))
 	} else {
 		match get_access_token(&auth_body.code).await {
-			Ok(access_token) => {
-				match get_authed_user(&access_token).await {
+			Ok(at) => {
+				match get_authed_user(&at.access_token).await {
 					Ok(gu) => {
 						let location = format!(
 							"{}/api/connected?authorId={}&authorName={}&authorState={}",
@@ -112,21 +118,21 @@ async fn auth<'a>(auth_body: web::Query<AuthBody>) -> HttpResponse {
 							gu.node_id,
 							gu.login,
 							encrypt(&serde_json::to_string(&AuthState {
-								access_token: access_token,
+								access_token: at.access_token,
 								installation_id: auth_body.installation_id,
 							}).unwrap())
 						);
-						HttpResponse::Found().header("Location", location).finish()
+						Ok((StatusCode::FOUND, [(header::LOCATION, location)]))
 					}
-					Err(failed_resp) => failed_resp
+					Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
 				}
-			},
-			Err(failed_resp) => failed_resp
+			}
+			Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
 		}
 	}
 }
 
-async fn get_access_token(code: &str) -> Result<String, HttpResponse> {
+async fn get_access_token(code: &str) -> Result<AccessTokenBody, String> {
 	let params = [
 		("client_id", GITHUB_CLIENT_ID.as_ref()),
 		("client_secret", GITHUB_CLIENT_SECRET.as_ref()),
@@ -134,28 +140,29 @@ async fn get_access_token(code: &str) -> Result<String, HttpResponse> {
 	];
 
 	let response = new_http_client().post("https://github.com/login/oauth/access_token")
-		.header("Accept", "application/json")
-		.send_form(&params)
+		.header(header::ACCEPT, "application/json")
+		.form(&params)
+		.send()
 		.await;
 	match response {
-		Ok(mut r) => {
+		Ok(r) => {
 			let token_body = r.json::<AccessTokenBody>().await;
 			match token_body {
 				Ok(at) => {
-					return Ok(at.access_token.unwrap_or_default())
+					return Ok(at)
 				},
-				Err(e) => {
-					return Err(e.error_response());
+				Err(_) => {
+					return Err("Failed to get access token".to_string());
 				}
 			}
 		},
-		Err(e) => {
-			return Err(e.error_response());
+		Err(_) => {
+			return Err("Failed to get access token".to_string());
 		}
 	}
 }
 
-async fn get_installation_token(installation_id: u64) -> Result<String, HttpResponse> {
+async fn get_installation_token(installation_id: u64) -> Result<String, String> {
 	let now = get_now();
 	let jwt_payload = json!({
 		"iat": now - 60,
@@ -165,50 +172,50 @@ async fn get_installation_token(installation_id: u64) -> Result<String, HttpResp
 	let jwt = encode(&Header::new(Algorithm::RS256), &jwt_payload, &EncodingKey::from_rsa_pem(GITHUB_PRIVATE_KEY.as_bytes()).unwrap()).unwrap();
 
 	let response = new_http_client().post(format!("https://api.github.com/app/installations/{installation_id}/access_tokens"))
-		.header("Accept", "application/vnd.github.v3+json")
-		.header("User-Agent", "Github Connector of Second State Reactor")
-		.header("Authorization", format!("Bearer {jwt}"))
+		.header(header::ACCEPT, "application/vnd.github.v3+json")
+		.header(header::USER_AGENT, "Github Connector of Second State Reactor")
+		.bearer_auth(jwt)
 		.send()
 		.await;
 	match response {
-		Ok(mut r) => {
+		Ok(r) => {
 			let token_body = r.json::<InstallationTokenBody>().await;
 			match token_body {
 				Ok(at) => {
 					return Ok(at.token)
 				},
-				Err(e) => {
-					return Err(e.error_response());
+				Err(_) => {
+					return Err("Failed to get installation token".to_string());
 				}
 			}
 		},
-		Err(e) => {
-			return Err(e.error_response());
+		Err(_) => {
+			return Err("Failed to get installation token".to_string());
 		}
 	}
 }
 
-async fn get_installed_repositories(install_token: &str, page: u32) -> Result<InstalledRepos, HttpResponse> {
+async fn get_installed_repositories(install_token: &str, page: u32) -> Result<InstalledRepos, String> {
 	let response = new_http_client()
 		.get(format!("https://api.github.com/installation/repositories?per_page={}&page={}", REPOS_PER_PAGE, page))
-		.header("Accept", "application/vnd.github.v3+json")
-		.header("User-Agent", "Github Connector of Second State Reactor")
-		.header("Authorization", format!("Bearer {install_token}"))
+		.header(header::ACCEPT, "application/vnd.github.v3+json")
+		.header(header::USER_AGENT, "Github Connector of Second State Reactor")
+		.bearer_auth(install_token)
 		.send()
 		.await;
 	match response {
-		Ok(mut r) => {
-			match r.json::<InstalledRepos>().limit(1 * 1024 * 1024).await {
+		Ok(r) => {
+			match r.json::<InstalledRepos>().await {
 				Ok(repos) => {
 					return Ok(repos)
 				},
-				Err(e) => {
-					return Err(e.error_response());
+				Err(_) => {
+					return Err("Failed to get installed repositories".to_string());
 				}
 			}
 		},
-		Err(e) => {
-			return Err(e.error_response());
+		Err(_) => {
+			return Err("Failed to get installed repositories".to_string());
 		}
 	}
 }
@@ -220,45 +227,58 @@ struct Event {
 	payload: String,
 }
 
-async fn capture_event(form: web::Form<Event>) -> HttpResponse {
-	let event = form.into_inner();
-	let result = get_author_token_from_reactor(&event.connector).await;
-	match result {
-		Err(failed_resp) => {
-			return failed_resp;
-		}
-		Ok(auth_state) => {
-			let mut payload: Value = serde_json::from_str(&event.payload).unwrap();
-			let auth_state = serde_json::from_str::<AuthState>(&decrypt(&auth_state)).unwrap();
-			let result = get_github_user(payload["sender"]["url"].as_str().unwrap(), &auth_state.access_token).await;
-			match result {
-				Err(failed_resp) => {
-					return failed_resp;
-				}
-				Ok(github_user) => {
-					if let Some(email) = github_user.email {
-						let obj = payload.as_object_mut().unwrap();
-						obj.insert("sender_email".to_string(), email.into());
-					}
-					post_event_to_reactor(&event.connector, &event.flow, &payload.to_string()).await;
-				}
+async fn capture_event(Form(event): Form<Event>) -> impl IntoResponse {
+	if let Ok(auth_state) = get_author_token_from_reactor(&event.connector).await {
+		let mut payload: Value = serde_json::from_str(&event.payload).unwrap();
+		// println!("{}", serde_json::to_string_pretty(&payload).unwrap());
+		let auth_state = serde_json::from_str::<AuthState>(&auth_state).unwrap();
+		if let Ok(github_user) = get_github_user(payload["sender"]["url"].as_str().unwrap(), &auth_state.access_token).await {
+			if let Some(email) = github_user.email {
+				let obj = payload.as_object_mut().unwrap();
+				obj.insert("sender_email".to_string(), email.into());
 			}
+			let te = match payload.get("starred_at") {
+				Some(_) => {
+					"star"
+				}
+				_ => {
+					match payload["issue"] {
+						Value::Object(_) => {
+							match payload["comment"] {
+								Value::Object(_) => {
+									"issue_comment"
+								}
+								_ => "issues"
+							}
+						}
+						_ => ""
+					}
+				}
+			};
+			let triggers = serde_json::json!({
+				"events": te,
+				"repo": payload["repository"]["node_id"].as_str().unwrap(),
+			});
+
+			post_event_to_reactor(&event.connector, &event.flow, &payload.to_string(), triggers).await;
 		}
 	}
 
-	return HttpResponse::Ok().finish();
+	(StatusCode::OK, String::new())
 }
 
-async fn post_event_to_reactor(user: &str, flow: &str, text: &str) {
+async fn post_event_to_reactor(user: &str, flow: &str, text: &str, triggers: Value) {
 	let request = serde_json::json!({
 		"user": user,
 		"flow": flow,
-		"text": text
+		"text": text,
+		"triggers": triggers,
 	});
 
 	let response = new_http_client().post(format!("{}/api/_funcs/_post", REACTOR_API_PREFIX.as_str()))
-		.set_header("Authorization", REACTOR_AUTH_TOKEN.as_str())
-		.send_json(&request)
+		.header(header::AUTHORIZATION, REACTOR_AUTH_TOKEN.as_str())
+		.json(&request)
+		.send()
 		.await;
 	if let Err(e) = response {
 		println!("{:?}", e);
@@ -273,86 +293,65 @@ struct GithubUser {
 }
 
 
-async fn get_authed_user(access_token: &str) -> Result<GithubUser, HttpResponse> {
+async fn get_authed_user(access_token: &str) -> Result<GithubUser, String> {
 	let response = new_http_client().get("https://api.github.com/user")
-		.set_header("Authorization", "Bearer ".to_owned() + access_token)
-		.set_header("User-Agent", "Github Connector of Second State Reactor")
+		.bearer_auth(access_token)
+		.header(header::USER_AGENT, "Github Connector of Second State Reactor")
 		.send()
 		.await;
 
 	match response {
-		Ok(mut res) => {
+		Ok(res) => {
 			let body = res.json::<GithubUser>().await;
 			match body {
 				Ok(gu) => {
 					return Ok(gu);
 				}
-				Err(e) => {
-					return Err(e.error_response());
+				Err(_) => {
+					return Err("Failed to get user".to_string());
 				}
 			}
 		}
-		Err(e) => {
-			return Err(e.error_response());
+		Err(_) => {
+			return Err("Failed to get user".to_string());
 		}
 	}
 }
 
-async fn get_github_user(api_url: &str, access_token: &str) -> Result<GithubUser, HttpResponse> {
+async fn get_github_user(api_url: &str, access_token: &str) -> Result<GithubUser, ()> {
 	let response = new_http_client().get(api_url)
-		.set_header("Authorization", "Bearer ".to_owned() + access_token)
-		.set_header("User-Agent", "Github Connector of Second State Reactor")
+		.bearer_auth(access_token)
+		.header(header::USER_AGENT, "Github Connector of Second State Reactor")
 		.send()
 		.await;
 
-	match response {
-		Ok(mut res) => {
-			let body = res.json::<GithubUser>().await;
-			match body {
-				Ok(gu) => {
-					return Ok(gu);
-				}
-				Err(e) => {
-					return Err(e.error_response());
-				}
-			}
-		}
-		Err(e) => {
-			return Err(e.error_response());
+	if let Ok(res) = response {
+		if let Ok(gu) = res.json::<GithubUser>().await {
+			return Ok(gu);
 		}
 	}
+	Err(())
 }
 
-async fn get_author_token_from_reactor(connector: &str) -> Result<String, HttpResponse> {
+async fn get_author_token_from_reactor(user: &str) -> Result<String, ()> {
 	let request = serde_json::json!({
-		"author": connector
+		"author": user
 	});
 
 	let response = new_http_client().post(format!("{}/api/_funcs/_author_state", REACTOR_API_PREFIX.as_str()))
-		.set_header("Authorization", REACTOR_AUTH_TOKEN.as_str())
-		.send_json(&request)
+		.header(header::AUTHORIZATION, REACTOR_AUTH_TOKEN.as_str())
+		.json(&request)
+		.send()
 		.await;
 
-	match response {
-		Ok(mut res) => {
-			let msg = res.body().await;
-			match msg {
-				Ok(bytes) => {
-					let body = String::from_utf8_lossy(&bytes.to_vec()).to_string();
-					if !res.status().is_success() {
-						return Err(HttpResponse::NotFound().body(body));
-					}
-					return Ok(body);
-				}
-				Err(e) => {
-					return Err(e.error_response());
-				}
+	if let Ok(res) = response {
+		if res.status().is_success() {
+			if let Ok(body) = res.text().await {
+				return Ok(decrypt(&body));
 			}
 		}
-		Err(e) => {
-			return Err(e.error_response());
-		}
 	}
+	Err(())
 }
 
 #[derive(Debug, Deserialize)]
@@ -374,10 +373,9 @@ struct HookReq {
 	custom: Option<HookEvents>,
 }
 
-async fn create_hook(body: web::Json<HookReq>) -> HttpResponse {
-	let req = body.into_inner();
+async fn create_hook(Json(req): Json<HookReq>) -> impl IntoResponse {
 	if req.custom.is_none() || req.flow.is_none() {
-		return HttpResponse::BadRequest().finish();
+		return Err((StatusCode::BAD_REQUEST, "Not enough parameter".to_string()));
 	}
 
 	let auth_state = serde_json::from_str::<AuthState>(&decrypt(&req.state)).unwrap();
@@ -385,15 +383,22 @@ async fn create_hook(body: web::Json<HookReq>) -> HttpResponse {
 	match get_installation_token(auth_state.installation_id).await {
 		Ok(install_token) => {
 			let events: Vec<String> = req.custom.unwrap().events.iter().map(|e| {e.field.clone()}).collect();
-			create_hook_inner(&req.user, &req.flow.unwrap(), &req.field, events, &install_token).await
+			match create_hook_inner(&req.user, &req.flow.unwrap(), &req.field, events, &install_token).await {
+				Ok(v) => {
+					Ok((StatusCode::CREATED, Json(v)))
+				}
+				Err(err_msg) => {
+					Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
+				}
+			}
 		},
-		Err(failed_resp) => {
-			return failed_resp;
+		Err(err_msg) => {
+			Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
 		}
 	}
 }
 
-async fn create_hook_inner(connector: &str, flow_id: &str, repo_full_name: &str, events: Vec<String>, install_token: &str) -> HttpResponse {
+async fn create_hook_inner(connector: &str, flow_id: &str, repo_full_name: &str, events: Vec<String>, install_token: &str) -> Result<Value, String> {
 	let param = json!({
 		"name": "web",
 		"active": true,
@@ -406,23 +411,23 @@ async fn create_hook_inner(connector: &str, flow_id: &str, repo_full_name: &str,
 	let response = new_http_client().post(format!("https://api.github.com/repos/{repo_full_name}/hooks"))
 		.header("Accept", "application/vnd.github.v3+json")
 		.header("User-Agent", "Github Connector of Second State Reactor")
-		.header("Authorization", format!("Bearer {install_token}"))
-		.send_json(&param)
+		.bearer_auth(install_token)
+		.json(&param)
+		.send()
 		.await;
-	if let Ok(mut r) = response {
-		if let Ok(body) = r.body().await {
-			if r.status().is_success() {
+	if let Ok(r) = response {
+		if r.status().is_success() {
+			if let Ok(body) = r.bytes().await {
 				let json_body: Value = serde_json::from_slice(&body).unwrap();
 				let hook_id = json_body["id"].to_string();
 				let result = serde_json::json!({
 					"revoke": format!("{}/revoke-hook?hook_id={hook_id}", SERVICE_API_PREFIX.as_str()),
 				});
-				return HttpResponse::Created().json(result);
+				return Ok(result);
 			}
-			return HttpResponse::with_body(r.status(), Body::Bytes(body));
 		}
 	}
-	return HttpResponse::ServiceUnavailable().finish();
+	Err("Failed to create hook".to_string())
 }
 
 #[derive(Deserialize)]
@@ -430,35 +435,40 @@ struct RevokeQuery {
 	hook_id: String
 }
 
-async fn revoke_hook(body: web::Json<HookReq>, query: web::Query<RevokeQuery>) -> HttpResponse {
-	let req = body.into_inner();
-
+async fn revoke_hook(Json(req): Json<HookReq>, Query(query): Query<RevokeQuery>) -> impl IntoResponse {
 	let auth_state = serde_json::from_str::<AuthState>(&decrypt(&req.state)).unwrap();
 
 	match get_installation_token(auth_state.installation_id).await {
 		Ok(install_token) => {
-			revoke_hook_inner(&req.field, &query.hook_id, &install_token).await
+			match revoke_hook_inner(&req.field, &query.hook_id, &install_token).await {
+				Ok(()) => {
+					Ok(StatusCode::OK)
+				}
+				Err(err_msg) => {
+					Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
+				}
+			}
 		},
-		Err(failed_resp) => {
-			return failed_resp;
+		Err(err_msg) => {
+			Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
 		}
 	}
 }
 
-async fn revoke_hook_inner(repo_full_name: &str, hook_id: &str, install_token: &str) -> HttpResponse {
+async fn revoke_hook_inner(repo_full_name: &str, hook_id: &str, install_token: &str) -> Result<(), String> {
 	let response = new_http_client().delete(format!("https://api.github.com/repos/{repo_full_name}/hooks/{hook_id}"))
-		.header("Accept", "application/vnd.github.v3+json")
-		.header("User-Agent", "Github Connector of Second State Reactor")
-		.header("Authorization", format!("Bearer {install_token}"))
+		.header(header::ACCEPT, "application/vnd.github.v3+json")
+		.header(header::USER_AGENT, "Github Connector of Second State Reactor")
+		.bearer_auth(install_token)
 		.send()
 		.await;
 	if let Ok(_) = response {
 		// the status can be 204 or 404
 		// so no need to check r.status().is_success()
 		// always return ok
-		return HttpResponse::Ok().finish();
+		return Ok(());
 	}
-	return HttpResponse::ServiceUnavailable().finish();
+	Err("Failed to revoke hook".to_string())
 }
 
 
@@ -469,7 +479,7 @@ struct TriggerRouteReq {
 	page: Option<u32>,
 }
 
-async fn hook_events(_: web::Json<TriggerRouteReq>) -> HttpResponse {
+async fn hook_events() -> impl IntoResponse {
 	let events = serde_json::json!({
 		"list": [
 			{
@@ -486,10 +496,10 @@ async fn hook_events(_: web::Json<TriggerRouteReq>) -> HttpResponse {
 			}
 		]
 	});
-	return HttpResponse::Ok().json(events);
+	Json(events)
 }
 
-async fn hook_repos(body: web::Json<TriggerRouteReq>) -> HttpResponse {
+async fn hook_repos(Json(body): Json<TriggerRouteReq>) -> impl IntoResponse {
 	let auth_state = serde_json::from_str::<AuthState>(&decrypt(&body.state)).unwrap();
 	match get_installation_token(auth_state.installation_id).await {
 		Ok(install_token) => {
@@ -504,32 +514,33 @@ async fn hook_repos(body: web::Json<TriggerRouteReq>) -> HttpResponse {
 						"total_page": total_page,
 						"list": irs
 					});
-					return HttpResponse::Ok().json(result);
+					Ok(Json(result))
 				}
-				Err(failed_resp) => failed_resp
+				Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
 			}
 		}
-		Err(_) => {
-			// Reconnect if installation_id has not found
-			HttpResponse::Found().header("Location", GITHUB_APP_INSTALL_LOCATION.as_ref() as &str).finish()
+		Err(err_msg) => {
+			Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
 		}
 	}
 }
 
-#[actix_web::main]
-async fn main() -> std::io::Result<()> {
+#[tokio::main]
+async fn main() {
+	let app = Router::new()
+		.route("/auth", get(auth))
+		.route("/event", post(capture_event))
+		.route("/create-hook", post(create_hook))
+		.route("/revoke-hook", delete(revoke_hook))
+		.route("/hook-events", post(hook_events))
+		.route("/hook-repos", post(hook_repos));
+
 	let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
 	let port = port.parse::<u16>().unwrap();
-	HttpServer::new(|| {
-		App::new()
-			.route("/auth", web::get().to(auth))
-			.route("/event", web::post().to(capture_event))
-			.route("/create-hook", web::post().to(create_hook))
-			.route("/revoke-hook", web::delete().to(revoke_hook))
-			.route("/hook-events", web::post().to(hook_events))
-			.route("/hook-repos", web::post().to(hook_repos))
-	})
-	.bind(("0.0.0.0", port))?
-	.run()
-	.await
+	let addr = SocketAddr::from(([127, 0, 0, 1], port));
+
+	axum::Server::bind(&addr)
+		.serve(app.into_make_service())
+		.await
+		.unwrap();
 }

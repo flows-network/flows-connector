@@ -881,14 +881,15 @@ dependencies = [
 name = "github-connector"
 version = "0.1.0"
 dependencies = [
- "actix-web",
- "awc",
+ "axum",
  "hex",
  "jsonwebtoken",
  "lazy_static",
  "openssl",
+ "reqwest",
  "serde",
  "serde_json",
+ "tokio 1.18.2",
 ]
 
 [[package]]
