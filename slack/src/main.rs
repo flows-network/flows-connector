@@ -162,6 +162,8 @@ struct EventBody {
 #[derive(Deserialize)]
 struct Event {
 	bot_id: Option<String>,
+	channel: Option<String>,
+	channel_type: Option<String>,
 	user: Option<String>,
 	text: Option<String>,
 	files: Option<Vec<File>>,
@@ -172,6 +174,13 @@ struct File {
 	name: String,
 	mimetype: String,
 	url_private: String,
+}
+
+async fn _capture_event_body(b: axum::body::Bytes) -> impl IntoResponse {
+	let s = String::from_utf8_lossy(&b.to_vec()).into_owned();
+	let v: Value= serde_json::from_str(&s).unwrap();
+	println!("{}", serde_json::to_string_pretty(&v).unwrap());
+	(StatusCode::OK, String::new())
 }
 
 async fn capture_event(Json(evt_body): Json<EventBody>) -> impl IntoResponse {
@@ -185,19 +194,33 @@ async fn capture_event(Json(evt_body): Json<EventBody>) -> impl IntoResponse {
 			let user = evt.user.unwrap_or_else(|| String::from(""));
 			let text = evt.text.unwrap_or_else(|| String::from(""));
 			let files = evt.files.unwrap_or_else(|| Vec::new());
-			tokio::spawn(post_event_to_reactor(user, text, files));
+			let channel = match evt.channel_type {
+				Some(ct) => {
+					match ct.eq("channel") {
+						true => evt.channel.unwrap_or_default(),
+						false => "".to_string()
+					}
+				}
+				_ => {
+					"".to_string()
+				}
+			};
+			tokio::spawn(post_event_to_reactor(user, text, files, channel));
 		}
 	}
 
 	(StatusCode::OK, String::new())
 }
 
-async fn post_event_to_reactor(user: String, text: String, files: Vec<File>) {
+async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, channel: String) {
 
 	if files.len() == 0 {
 		let request = serde_json::json!({
 			"user": user,
-			"text": text
+			"text": text,
+			"triggers": {
+				"channels": channel
+			}
 		});
 
 		_ = new_http_client().post(format!("{}/api/_funcs/_post", REACTOR_API_PREFIX.as_str()))
@@ -209,7 +232,8 @@ async fn post_event_to_reactor(user: String, text: String, files: Vec<File>) {
 		if let Ok(access_token) = get_author_token_from_reactor(&user).await {
 			let mut request = multipart::Form::new()
 				.text("user", user)
-				.text("text", text);
+				.text("text", text)
+				.text("triggers", format!(r#"{{"channels": "{}"}}"#, channel));
 
 			for f in files.into_iter() {
 				if let Ok(b) = get_file(&access_token, &f.url_private).await {
@@ -368,12 +392,145 @@ async fn upload_msg(ContentLengthLimit(mut multipart): ContentLengthLimit<Multip
 	}
 }
 
+const CHANNELS_PER_PAGE: u32 = 20;
+#[derive(Debug, Serialize, Deserialize)]
+struct Channel {
+	id: String,
+	name: String,
+	is_channel: bool,
+	is_member: bool,
+}
+
+#[derive(Deserialize)]
+struct RespMeta {
+	next_cursor: String,
+}
+
+#[derive(Deserialize)]
+struct Channels {
+	ok: bool,
+	channels: Vec<Channel>,
+	response_metadata: RespMeta
+}
+#[derive(Deserialize)]
+struct RouteReq {
+	// user: String,
+	state: String,
+	cursor: Option<String>,
+}
+
+async fn get_channels(access_token: &str, cursor: String) -> Result<Channels, String> {
+	let response = new_http_client()
+		.get(format!("https://slack.com/api/conversations.list?limit={}&cursor={}", CHANNELS_PER_PAGE, cursor))
+		.bearer_auth(access_token)
+		.send()
+		.await;
+	if let Ok(r) = response {
+		if let Ok(channels) = r.json::<Channels>().await {
+			if channels.ok {
+				return Ok(channels);
+			}
+		}
+	}
+	Err("Failed to get installed repositories".to_string())
+}
+
+async fn route_channels(Json(body): Json<RouteReq>) -> impl IntoResponse {
+	let access_token = decrypt(body.state);
+	let cursor = body.cursor.unwrap_or_default();
+	match get_channels(&access_token, cursor).await {
+		Ok(chs) => {
+			let mut rs: Vec<Value> = chs.channels.iter().map(|ch| {serde_json::json!({
+				"field": ch.name,
+				"value": ch.id
+			})}).collect();
+			rs.push(serde_json::json!({
+				"field": "App im",
+				"value": ""
+			}));
+			let result = match chs.response_metadata.next_cursor.as_str() {
+				"" => {
+					serde_json::json!({
+						"list": rs
+					})
+				}
+				s => {
+					serde_json::json!({
+						"next_cursor": s,
+						"list": rs
+					})
+				}
+			};
+			Ok(Json(result))
+		}
+		Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
+	}
+}
+
+#[derive(Debug, Deserialize)]
+struct JoinChannelReq {
+	user: String,
+    state: String,
+	// field: String,
+	value: String,
+}
+
+async fn join_channel(Json(req): Json<JoinChannelReq>) -> impl IntoResponse {
+	let access_token = decrypt(req.state);
+
+	match req.value.as_str() {
+		"" => Ok((StatusCode::CREATED, Json(()))),
+		_ => {
+			match join_channel_inner(&req.user, &req.value, &access_token).await {
+				Ok(v) => {
+					Ok((StatusCode::CREATED, Json(v)))
+				}
+				Err(err_msg) => {
+					Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
+				}
+			}
+		}
+	}
+}
+
+async fn join_channel_inner(connector: &str, channel: &str, access_token: &str) -> Result<(), String> {
+	let param = match channel {
+		"" => serde_json::json!({
+			"channel": connector
+		}),
+		s => serde_json::json!({
+			"channel": s
+		})
+	};
+	let response = new_http_client().post(format!("https://slack.com/api/conversations.join"))
+		.bearer_auth(access_token)
+		.json(&param)
+		.send()
+		.await;
+	if let Ok(r) = response {
+		if r.status().is_success() {
+			if let Ok(body) = r.bytes().await {
+				let json_body: Value = serde_json::from_slice(&body).unwrap();
+				if let Some(ok) = json_body["ok"].as_bool() {
+					if ok {
+						return Ok(());
+					}
+				}
+				
+			}
+		}
+	}
+	Err("Failed to create hook".to_string())
+}
+
 #[tokio::main]
 async fn main() {
 	let app = Router::new()
 		.route("/auth", get(auth))
 		.route("/event", post(capture_event))
-		.route("/post", post(post_msg).put(upload_msg));
+		.route("/post", post(post_msg).put(upload_msg))
+		.route("/channels", post(route_channels))
+		.route("/join-channel", post(join_channel));
 
 	let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
 	let port = port.parse::<u16>().unwrap();
