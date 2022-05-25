@@ -228,6 +228,11 @@ struct Event {
 }
 
 async fn capture_event(Form(event): Form<Event>) -> impl IntoResponse {
+	tokio::spawn(capture_event_inner(event));
+	(StatusCode::OK, String::new())
+}
+
+async fn capture_event_inner(event: Event) {
 	if let Ok(auth_state) = get_author_token_from_reactor(&event.connector).await {
 		let mut payload: Value = serde_json::from_str(&event.payload).unwrap();
 		// println!("{}", serde_json::to_string_pretty(&payload).unwrap());
@@ -263,8 +268,6 @@ async fn capture_event(Form(event): Form<Event>) -> impl IntoResponse {
 			post_event_to_reactor(&event.connector, &event.flow, &payload.to_string(), triggers).await;
 		}
 	}
-
-	(StatusCode::OK, String::new())
 }
 
 async fn post_event_to_reactor(user: &str, flow: &str, text: &str, triggers: Value) {
@@ -476,7 +479,7 @@ async fn revoke_hook_inner(repo_full_name: &str, hook_id: &str, install_token: &
 struct TriggerRouteReq {
 	// user: String,
 	state: String,
-	page: Option<u32>,
+	cursor: Option<String>,
 }
 
 async fn hook_events() -> impl IntoResponse {
@@ -503,20 +506,33 @@ async fn hook_repos(Json(body): Json<TriggerRouteReq>) -> impl IntoResponse {
 	let auth_state = serde_json::from_str::<AuthState>(&decrypt(&body.state)).unwrap();
 	match get_installation_token(auth_state.installation_id).await {
 		Ok(install_token) => {
-			match get_installed_repositories(&install_token, body.page.unwrap_or_default()).await {
-				Ok(irs) => {
-					let total_page = (irs.total_count as f32 / REPOS_PER_PAGE as f32).ceil() as u32;
-					let irs: Vec<Value> = irs.repositories.iter().map(|ir| {serde_json::json!({
-						"field": ir.full_name,
-						"value": ir.node_id
-					})}).collect();
-					let result = serde_json::json!({
-						"total_page": total_page,
-						"list": irs
-					});
-					Ok(Json(result))
+			let page = body.cursor.unwrap_or_else(|| "1".to_string());
+			if let Ok(page) = page.parse::<u32>() {
+				match get_installed_repositories(&install_token, page).await {
+					Ok(irs) => {
+						let rs: Vec<Value> = irs.repositories.iter().map(|ir| {serde_json::json!({
+							"field": ir.full_name,
+							"value": ir.node_id
+						})}).collect();
+						let result = match irs.total_count > page * REPOS_PER_PAGE {
+							true => {
+								serde_json::json!({
+									"next_cursor": page + 1,
+									"list": rs
+								})
+							}
+							false => {
+								serde_json::json!({
+									"list": rs
+								})
+							}
+						};
+						Ok(Json(result))
+					}
+					Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
 				}
-				Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
+			} else {
+				Err((StatusCode::BAD_REQUEST, "Invalid cursor".to_string()))
 			}
 		}
 		Err(err_msg) => {

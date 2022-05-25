@@ -185,7 +185,7 @@ async fn capture_event(Json(evt_body): Json<EventBody>) -> impl IntoResponse {
 			let user = evt.user.unwrap_or_else(|| String::from(""));
 			let text = evt.text.unwrap_or_else(|| String::from(""));
 			let files = evt.files.unwrap_or_else(|| Vec::new());
-			post_event_to_reactor(user, text, files).await;
+			tokio::spawn(post_event_to_reactor(user, text, files));
 		}
 	}
 
