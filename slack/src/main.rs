@@ -163,7 +163,7 @@ struct EventBody {
 struct Event {
 	bot_id: Option<String>,
 	channel: Option<String>,
-	channel_type: Option<String>,
+	// channel_type: Option<String>,
 	user: Option<String>,
 	text: Option<String>,
 	files: Option<Vec<File>>,
@@ -194,17 +194,7 @@ async fn capture_event(Json(evt_body): Json<EventBody>) -> impl IntoResponse {
 			let user = evt.user.unwrap_or_else(|| String::from(""));
 			let text = evt.text.unwrap_or_else(|| String::from(""));
 			let files = evt.files.unwrap_or_else(|| Vec::new());
-			let channel = match evt.channel_type {
-				Some(ct) => {
-					match ct.eq("channel") {
-						true => evt.channel.unwrap_or_default(),
-						false => "".to_string()
-					}
-				}
-				_ => {
-					"".to_string()
-				}
-			};
+			let channel = evt.channel.unwrap_or_default();
 			tokio::spawn(post_event_to_reactor(user, text, files, channel));
 		}
 	}
@@ -396,9 +386,16 @@ const CHANNELS_PER_PAGE: u32 = 20;
 #[derive(Debug, Serialize, Deserialize)]
 struct Channel {
 	id: String,
-	name: String,
-	is_channel: bool,
-	is_member: bool,
+	name: Option<String>,
+	is_channel: Option<bool>,
+	is_im: Option<bool>,
+	user: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct ChannelInfo {
+	ok: bool,
+	channel: Option<Channel>,
 }
 
 #[derive(Deserialize)]
@@ -414,14 +411,14 @@ struct Channels {
 }
 #[derive(Deserialize)]
 struct RouteReq {
-	// user: String,
+	user: String,
 	state: String,
 	cursor: Option<String>,
 }
 
 async fn get_channels(access_token: &str, cursor: String) -> Result<Channels, String> {
 	let response = new_http_client()
-		.get(format!("https://slack.com/api/conversations.list?limit={}&cursor={}", CHANNELS_PER_PAGE, cursor))
+		.get(format!("https://slack.com/api/conversations.list?limit={}&cursor={}&types=public_channel,im", CHANNELS_PER_PAGE, cursor))
 		.bearer_auth(access_token)
 		.send()
 		.await;
@@ -435,19 +432,44 @@ async fn get_channels(access_token: &str, cursor: String) -> Result<Channels, St
 	Err("Failed to get installed repositories".to_string())
 }
 
+async fn view_channel(access_token: &str, channel: &str) -> Option<Channel> {
+	let response = new_http_client()
+		.get(format!("https://slack.com/api/conversations.info?channel={}", channel))
+		.bearer_auth(access_token)
+		.send()
+		.await;
+	if let Ok(r) = response {
+		if let Ok(ci) = r.json::<ChannelInfo>().await {
+			if ci.ok {
+				return ci.channel;
+			}
+		}
+	}
+	None
+}
+
 async fn route_channels(Json(body): Json<RouteReq>) -> impl IntoResponse {
 	let access_token = decrypt(body.state);
 	let cursor = body.cursor.unwrap_or_default();
 	match get_channels(&access_token, cursor).await {
-		Ok(chs) => {
-			let mut rs: Vec<Value> = chs.channels.iter().map(|ch| {serde_json::json!({
-				"field": ch.name,
-				"value": ch.id
-			})}).collect();
-			rs.push(serde_json::json!({
-				"field": "App im",
-				"value": ""
-			}));
+		Ok(mut chs) => {
+			let rs: Vec<Value> = chs.channels.iter_mut().filter_map(|ch| {
+				if ch.is_channel.is_some() && ch.is_channel.unwrap() {
+					return Some(serde_json::json!({
+						"field": ch.name,
+						"value": ch.id
+					}));
+				} else if ch.is_im.is_some() && ch.is_im.unwrap() {
+					if ch.user.is_some() && ch.user.take().unwrap().eq(&body.user) {
+						return Some(serde_json::json!({
+							"field": "Reactor App",
+							"value": ch.id
+						}));
+					}
+				}
+				return None;
+			})
+			.collect();
 			let result = match chs.response_metadata.next_cursor.as_str() {
 				"" => {
 					serde_json::json!({
@@ -469,7 +491,7 @@ async fn route_channels(Json(body): Json<RouteReq>) -> impl IntoResponse {
 
 #[derive(Debug, Deserialize)]
 struct JoinChannelReq {
-	user: String,
+	// user: String,
     state: String,
 	// field: String,
 	value: String,
@@ -478,30 +500,31 @@ struct JoinChannelReq {
 async fn join_channel(Json(req): Json<JoinChannelReq>) -> impl IntoResponse {
 	let access_token = decrypt(req.state);
 
-	match req.value.as_str() {
-		"" => Ok((StatusCode::CREATED, Json(()))),
-		_ => {
-			match join_channel_inner(&req.user, &req.value, &access_token).await {
-				Ok(v) => {
-					Ok((StatusCode::CREATED, Json(v)))
+	match view_channel(&access_token, &req.value).await {
+		Some(ch) => {
+			if ch.is_channel.is_some() && ch.is_channel.unwrap() {
+				match join_channel_inner(&req.value, &access_token).await {
+					Ok(v) => {
+						return Ok((StatusCode::CREATED, Json(v)));
+					}
+					Err(err_msg) => {
+						return Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg));
+					}
 				}
-				Err(err_msg) => {
-					Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
-				}
+			} else {
+				return Ok((StatusCode::OK, Json(())));
 			}
+		}
+		None => {
+			return Err((StatusCode::BAD_REQUEST, "Channel not found".to_string()));
 		}
 	}
 }
 
-async fn join_channel_inner(connector: &str, channel: &str, access_token: &str) -> Result<(), String> {
-	let param = match channel {
-		"" => serde_json::json!({
-			"channel": connector
-		}),
-		s => serde_json::json!({
-			"channel": s
-		})
-	};
+async fn join_channel_inner(channel: &str, access_token: &str) -> Result<(), String> {
+	let param = serde_json::json!({
+		"channel": channel
+	});
 	let response = new_http_client().post(format!("https://slack.com/api/conversations.join"))
 		.bearer_auth(access_token)
 		.json(&param)
