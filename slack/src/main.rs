@@ -153,13 +153,13 @@ async fn get_authed_user(access_token: &str) -> Result<String, String> {
 	}
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct EventBody {
 	challenge: Option<String>,
 	event: Option<Event>,
 }
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 struct Event {
 	bot_id: Option<String>,
 	channel: Option<String>,
@@ -203,7 +203,6 @@ async fn capture_event(Json(evt_body): Json<EventBody>) -> impl IntoResponse {
 }
 
 async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, channel: String) {
-
 	if files.len() == 0 {
 		let request = serde_json::json!({
 			"user": user,
@@ -456,7 +455,7 @@ async fn route_channels(Json(body): Json<RouteReq>) -> impl IntoResponse {
 			let rs: Vec<Value> = chs.channels.iter_mut().filter_map(|ch| {
 				if ch.is_channel.is_some() && ch.is_channel.unwrap() {
 					return Some(serde_json::json!({
-						"field": ch.name,
+						"field": format!("# {}", ch.name.take().unwrap_or_else(|| "no name".to_string())),
 						"value": ch.id
 					}));
 				} else if ch.is_im.is_some() && ch.is_im.unwrap() {
