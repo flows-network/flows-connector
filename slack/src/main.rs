@@ -281,28 +281,36 @@ async fn get_file(access_token: &str, url_private: &str) -> Result<Vec<u8>, ()> 
 	Err(())
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+struct ForwardRoute {
+	route: String,
+	value: String,
+}
+
 #[derive(Deserialize, Serialize)]
 struct PostBody {
 	user: String,
 	text: String,
 	state: String,
+	forwards: Vec<ForwardRoute>,
 }
 
 async fn post_msg(Json(msg_body): Json<PostBody>) -> Result<StatusCode, (StatusCode, &'static str)> {
-	let request = serde_json::json!({
-		"channel": msg_body.user,
-		"text": msg_body.text,
-	});
+	for pb in msg_body.forwards.iter() {
+		if pb.route.eq("channels") {
+			let request = serde_json::json!({
+				"channel": pb.value,
+				"text": msg_body.text,
+			});
 
-	let response = new_http_client().post("https://slack.com/api/chat.postMessage")
-		.bearer_auth(decrypt(msg_body.state))
-		.json(&request)
-		.send()
-		.await;
-	match response {
-		Ok(_) => Ok(StatusCode::OK),
-		Err(_) => Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to post message to slack"))
+			tokio::spawn(new_http_client().post("https://slack.com/api/chat.postMessage")
+				.bearer_auth(decrypt(msg_body.state.clone()))
+				.json(&request)
+				.send());
+		}
 	}
+
+	Ok(StatusCode::OK)
 }
 
 async fn upload_file_to_slack(form: multipart::Form, access_token: String) {
@@ -323,6 +331,7 @@ async fn upload_msg(ContentLengthLimit(mut multipart): ContentLengthLimit<Multip
 	let mut user = String::new();
 	let mut text = String::new();
 	let mut state = String::new();
+	let mut forwards = Vec::new();
 
 	let mut parts = Vec::new();
 	while let Some(field) = multipart.next_field().await.unwrap() {
@@ -353,6 +362,13 @@ async fn upload_msg(ContentLengthLimit(mut multipart): ContentLengthLimit<Multip
 					text = t;
 				}
 			}
+			"forwards" => {
+				if let Ok(f) = field.text().await {
+					if let Ok(fws) = serde_json::from_str::<Vec<ForwardRoute>>(&f) {
+						forwards = fws;
+					}
+				}
+			}
 			_ => {}
 		}
 	}
@@ -375,6 +391,7 @@ async fn upload_msg(ContentLengthLimit(mut multipart): ContentLengthLimit<Multip
 			user: user,
 			state: state,
 			text: text,
+			forwards: forwards,
 		})).await;
 	} else {
 		return Ok(StatusCode::OK);
