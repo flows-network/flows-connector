@@ -388,6 +388,7 @@ struct Channel {
 	name: Option<String>,
 	is_channel: Option<bool>,
 	is_im: Option<bool>,
+	is_member: Option<bool>,
 	user: Option<String>,
 }
 
@@ -501,7 +502,8 @@ async fn join_channel(Json(req): Json<JoinChannelReq>) -> impl IntoResponse {
 
 	match view_channel(&access_token, &req.value).await {
 		Some(ch) => {
-			if ch.is_channel.is_some() && ch.is_channel.unwrap() {
+			if ch.is_channel.is_some() && ch.is_channel.unwrap() &&
+				(ch.is_member.is_some() && !ch.is_member.unwrap()) {
 				match join_channel_inner(&req.value, &access_token).await {
 					Ok(v) => {
 						return Ok((StatusCode::CREATED, Json(v)));
