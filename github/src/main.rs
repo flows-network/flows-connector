@@ -568,33 +568,35 @@ struct PostBody {
 }
 
 async fn post_msg(Json(msg_body): Json<PostBody>) -> Result<StatusCode, (StatusCode, &'static str)> {
-	let auth_state = serde_json::from_str::<AuthState>(&decrypt(&msg_body.state)).unwrap();
-	let route = msg_body.forwards.into_iter().fold((None, None), |mut accum, f| {
-		if accum.0.is_none() && f.route.eq("action") {
-			accum.0 = Some(f.value);
-		} else if accum.1.is_none() && f.route.eq("repo") {
-			accum.1 = Some(f.value);
-		}
-		accum
-	});
+	tokio::spawn(async move {
+		let auth_state = serde_json::from_str::<AuthState>(&decrypt(&msg_body.state)).unwrap();
+		let route = msg_body.forwards.into_iter().fold((None, None), |mut accum, f| {
+			if accum.0.is_none() && f.route.eq("action") {
+				accum.0 = Some(f.value);
+			} else if accum.1.is_none() && f.route.eq("repo") {
+				accum.1 = Some(f.value);
+			}
+			accum
+		});
 
-	if route.0.is_some() && route.1.is_some() {
-		if let Ok(repo_name) = get_repo_namewithowner(&route.1.unwrap(), &auth_state.access_token).await {
-			match route.0.unwrap().as_str() {
-				"create-issue" => {
-					_ = new_http_client().post(format!("https://api.github.com/repos/{}/issues", repo_name))
-						.header(header::ACCEPT, "application/vnd.github.v3+json")
-						.header(header::USER_AGENT, "Github Connector of Second State Reactor")
-						.bearer_auth(auth_state.access_token)
-						.json(&serde_json::json!({
-							"title": msg_body.text
-						}))
-						.send().await;
+		if route.0.is_some() && route.1.is_some() {
+			if let Ok(repo_name) = get_repo_namewithowner(&route.1.unwrap(), &auth_state.access_token).await {
+				match route.0.unwrap().as_str() {
+					"create-issue" => {
+						_ = new_http_client().post(format!("https://api.github.com/repos/{}/issues", repo_name))
+							.header(header::ACCEPT, "application/vnd.github.v3+json")
+							.header(header::USER_AGENT, "Github Connector of Second State Reactor")
+							.bearer_auth(auth_state.access_token)
+							.json(&serde_json::json!({
+								"title": msg_body.text
+							}))
+							.send().await;
+					}
+					_ => ()
 				}
-				_ => ()
 			}
 		}
-	}
+	});
 
 	Ok(StatusCode::OK)
 }
