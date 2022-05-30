@@ -4,7 +4,5 @@ members = [
 	"github",
 	"gmail",
 	"slack",
-	"sendgrid",
-	"linkinq",
-	"csvbox"
+	"sendgrid"
 ]

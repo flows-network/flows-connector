@@ -541,6 +541,87 @@ async fn repos(Json(body): Json<RouteReq>) -> impl IntoResponse {
 	}
 }
 
+async fn actions() -> impl IntoResponse {
+	let events = serde_json::json!({
+		"list": [
+			{
+				"field": "Create Issue",
+				"value": "create-issue"
+			}
+		]
+	});
+	Json(events)
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+struct ForwardRoute {
+	route: String,
+	value: String,
+}
+
+#[derive(Deserialize, Serialize)]
+struct PostBody {
+	user: String,
+	text: String,
+	state: String,
+	forwards: Vec<ForwardRoute>,
+}
+
+async fn post_msg(Json(msg_body): Json<PostBody>) -> Result<StatusCode, (StatusCode, &'static str)> {
+	let auth_state = serde_json::from_str::<AuthState>(&decrypt(&msg_body.state)).unwrap();
+	let route = msg_body.forwards.into_iter().fold((None, None), |mut accum, f| {
+		if accum.0.is_none() && f.route.eq("action") {
+			accum.0 = Some(f.value);
+		} else if accum.1.is_none() && f.route.eq("repo") {
+			accum.1 = Some(f.value);
+		}
+		accum
+	});
+
+	if route.0.is_some() && route.1.is_some() {
+		if let Ok(repo_name) = get_repo_namewithowner(&route.1.unwrap(), &auth_state.access_token).await {
+			match route.0.unwrap().as_str() {
+				"create-issue" => {
+					_ = new_http_client().post(format!("https://api.github.com/repos/{}/issues", repo_name))
+						.header(header::ACCEPT, "application/vnd.github.v3+json")
+						.header(header::USER_AGENT, "Github Connector of Second State Reactor")
+						.bearer_auth(auth_state.access_token)
+						.json(&serde_json::json!({
+							"title": msg_body.text
+						}))
+						.send().await;
+				}
+				_ => ()
+			}
+		}
+	}
+
+	Ok(StatusCode::OK)
+}
+
+async fn get_repo_namewithowner(node_id: &str, access_token: &str) -> Result<String, String> {
+	// use GraphQL to query the repo's nameWithOwner
+	let query = format!(r#"{{"query":"query {{\n  node(id:\"{}\") {{\n   ... on Repository {{\n       nameWithOwner\n    }}\n  }}\n}}"}}"#, node_id);
+	let response = new_http_client().post("https://api.github.com/graphql")
+		.header(header::ACCEPT, "application/vnd.github.v3+json")
+		.header(header::USER_AGENT, "Github Connector of Second State Reactor")
+		.bearer_auth(access_token)
+		.json(&serde_json::from_str::<Value>(&query).unwrap())
+		.send().await;
+	if let Ok(r) = response {
+		if r.status().is_success() {
+			if let Ok(b) = serde_json::from_str::<Value>(&r.text().await.unwrap()) {
+				if let Some(name) = b["data"]["node"]["nameWithOwner"].as_str() {
+					return Ok(String::from(name));
+				}
+			}
+		} else {
+			println!("{:?}", r.text().await);
+		}
+	}
+	Err("Repository not found".to_string())
+}
+
 #[tokio::main]
 async fn main() {
 	let app = Router::new()
@@ -549,7 +630,9 @@ async fn main() {
 		.route("/create-hook", post(create_hook))
 		.route("/revoke-hook", delete(revoke_hook))
 		.route("/hook-events", post(hook_events))
-		.route("/repos", post(repos));
+		.route("/actions", post(actions))
+		.route("/repos", post(repos))
+		.route("/post", post(post_msg));
 
 	let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
 	let port = port.parse::<u16>().unwrap();
