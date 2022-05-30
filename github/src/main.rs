@@ -476,7 +476,7 @@ async fn revoke_hook_inner(repo_full_name: &str, hook_id: &str, install_token: &
 
 
 #[derive(Debug, Deserialize)]
-struct TriggerRouteReq {
+struct RouteReq {
 	// user: String,
 	state: String,
 	cursor: Option<String>,
@@ -502,7 +502,7 @@ async fn hook_events() -> impl IntoResponse {
 	Json(events)
 }
 
-async fn hook_repos(Json(body): Json<TriggerRouteReq>) -> impl IntoResponse {
+async fn repos(Json(body): Json<RouteReq>) -> impl IntoResponse {
 	let auth_state = serde_json::from_str::<AuthState>(&decrypt(&body.state)).unwrap();
 	match get_installation_token(auth_state.installation_id).await {
 		Ok(install_token) => {
@@ -549,7 +549,7 @@ async fn main() {
 		.route("/create-hook", post(create_hook))
 		.route("/revoke-hook", delete(revoke_hook))
 		.route("/hook-events", post(hook_events))
-		.route("/hook-repos", post(hook_repos));
+		.route("/repos", post(repos));
 
 	let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
 	let port = port.parse::<u16>().unwrap();
