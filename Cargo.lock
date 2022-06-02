@@ -1830,7 +1830,6 @@ version = "0.1.0"
 dependencies = [
  "actix-web",
  "awc",
- "base64 0.13.0",
  "hex",
  "lazy_static",
  "openssl",
@@ -2417,6 +2416,22 @@ name = "try-lock"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59547bce71d9c38b83d9c0e92b6066c4253371f15005def0c30d9657f50c7642"
+
+[[package]]
+name = "twitter-connector"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.13.0",
+ "hex",
+ "lazy_static",
+ "openssl",
+ "rand 0.7.3",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio 1.18.2",
+]
 
 [[package]]
 name = "typenum"
