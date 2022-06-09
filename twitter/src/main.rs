@@ -250,15 +250,15 @@ struct ForwardRoute {
 	value: String,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 struct PostBody {
-	user: String,
+	// user: String,
 	text: String,
 	state: String,
 	forwards: Vec<ForwardRoute>,
 }
 
-async fn post_msg(Json(msg_body): Json<PostBody>) -> Result<StatusCode, (StatusCode, &'static str)> {
+async fn post_msg(Json(msg_body): Json<PostBody>) -> impl IntoResponse {
 	tokio::spawn(async move {
 		let route = msg_body.forwards.into_iter().fold(None, |mut accum, f| {
 			if accum.is_none() && f.route.eq("action") {
@@ -282,7 +282,49 @@ async fn post_msg(Json(msg_body): Json<PostBody>) -> Result<StatusCode, (StatusC
 		}
 	});
 
-	Ok(StatusCode::OK)
+	StatusCode::OK
+}
+
+#[derive(Deserialize)]
+struct RefreshState {
+	refresh_state: String,
+}
+
+async fn refresh_token(Json(msg_body): Json<RefreshState>) -> impl IntoResponse {
+	let params = [
+		("grant_type", "refresh_token"),
+		("refresh_token", &decrypt(&msg_body.refresh_state))
+	];
+
+	let basic_auth = base64::encode(format!("{}:{}",
+		TWITTER_OAUTH_CLIENT_ID.as_str(),
+		TWITTER_OAUTH_CLIENT_SECRET.as_str()));
+
+	let response = new_http_client().post("https://api.twitter.com/2/oauth2/token")
+		.header("Authorization", format!("Basic {}", basic_auth))
+		.form(&params)
+		.send()
+		.await;
+	match response {
+		Ok(r) => {
+			let oauth_body = r.json::<OAuthBody>().await;
+			match oauth_body {
+				Ok(at) => {
+					let encrypted = serde_json::json!({
+						"access_state": encrypt(&at.access_token),
+						"refresh_state": encrypt(&at.refresh_token)
+					});
+					Ok((StatusCode::OK, serde_json::to_string(&encrypted).unwrap()))
+				}
+				Err(_) => {
+					Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to get access token".to_string()))
+				}
+			}
+		},
+		Err(_) => {
+			Err((StatusCode::INTERNAL_SERVER_ERROR, "Failed to get access token".to_string()))
+		}
+	}
 }
 
 #[tokio::main]
@@ -291,6 +333,7 @@ async fn main() {
 		.route("/connect", get(connect))
 		.route("/poll-block", get(poll_block))
 		.route("/auth", get(auth))
+		.route("/refresh", post(refresh_token))
 		.route("/actions", post(actions))
 		.route("/post", post(post_msg));
 
