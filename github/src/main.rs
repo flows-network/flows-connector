@@ -359,8 +359,8 @@ async fn get_author_token_from_reactor(user: &str) -> Result<String, ()> {
 
 #[derive(Debug, Deserialize)]
 struct FieldValue {
-	field: String,
-	// value: String,
+	// field: String,
+	value: String,
 }
 #[derive(Debug, Deserialize)]
 struct HookEvents {
@@ -385,7 +385,7 @@ async fn create_hook(Json(req): Json<HookReq>) -> impl IntoResponse {
 
 	match get_installation_token(auth_state.installation_id).await {
 		Ok(install_token) => {
-			let events: Vec<String> = req.custom.unwrap().events.iter().map(|e| {e.field.clone()}).collect();
+			let events: Vec<String> = req.custom.unwrap().events.iter().map(|e| {e.value.clone()}).collect();
 			match create_hook_inner(&req.user, &req.flow.unwrap(), &req.field, events, &install_token).await {
 				Ok(v) => {
 					Ok((StatusCode::CREATED, Json(v)))
@@ -486,15 +486,15 @@ async fn hook_events() -> impl IntoResponse {
 	let events = serde_json::json!({
 		"list": [
 			{
-				"field": "issues",
+				"field": "Issues",
 				"value": "issues"
 			},
 			{
-				"field": "issue_comment",
+				"field": "Issue Comment",
 				"value": "issue_comment"
 			},
 			{
-				"field": "star",
+				"field": "Star",
 				"value": "star"
 			}
 		]
