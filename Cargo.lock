@@ -815,21 +815,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "gmail-connector"
-version = "0.1.0"
-dependencies = [
- "actix-web",
- "awc",
- "base64 0.13.0",
- "hex",
- "lazy_static",
- "openssl",
- "serde",
- "serde_json",
- "urlencoding",
-]
-
-[[package]]
 name = "h2"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
