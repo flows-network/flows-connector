@@ -5,5 +5,5 @@ members = [
 	"slack",
 	"sendgrid",
 	"twitter",
-	"discord"
+	"googleform"
 ]
