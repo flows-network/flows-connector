@@ -1,8 +1,7 @@
 use std::env;
 use serde::{Serialize, Deserialize};
 use actix_web::{web, App, HttpResponse, HttpServer};
-use lazy_static::lazy_static;
-use openssl::rsa::{Rsa, Padding};
+
 
 static CONNECT_HTML: &str = include_str!("./connect.html");
 
@@ -21,3 +20,4 @@ async fn main() -> std::io::Result<()> {
 	.bind(("0.0.0.0", port))?
 	.run()
 	.await
+}
