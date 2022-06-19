@@ -3,6 +3,6 @@ members = [
 	"rsa-generator",
 	"github",
 	"slack",
-	"sendgrid",
+	"sendgrid", "sendgrid/wasm",
 	"twitter"
 ]

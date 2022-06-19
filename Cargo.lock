@@ -1546,7 +1546,7 @@ checksum = "6a6b1679d49b24bbfe0c803429aa1874472f50d9b363131f0e89fc356b544d03"
 dependencies = [
  "getrandom 0.1.16",
  "libc",
- "rand_chacha",
+ "rand_chacha 0.2.2",
  "rand_core 0.5.1",
  "rand_hc",
 ]
@@ -1557,6 +1557,8 @@ version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
 dependencies = [
+ "libc",
+ "rand_chacha 0.3.1",
  "rand_core 0.6.3",
 ]
 
@@ -1568,6 +1570,16 @@ checksum = "f4c8ed856279c9737206bf725bf36935d8666ead7aa69b52be55af369d193402"
 dependencies = [
  "ppv-lite86",
  "rand_core 0.5.1",
+]
+
+[[package]]
+name = "rand_chacha"
+version = "0.3.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
+dependencies = [
+ "ppv-lite86",
+ "rand_core 0.6.3",
 ]
 
 [[package]]
@@ -1822,6 +1834,17 @@ dependencies = [
  "serde",
  "serde_json",
  "urlencoding",
+]
+
+[[package]]
+name = "sendgrid-connector-wasm"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "wasmedge-bindgen",
+ "wasmedge-bindgen-macro",
+ "wasmedge-wasi-helper",
 ]
 
 [[package]]
@@ -2411,7 +2434,7 @@ dependencies = [
  "hex",
  "lazy_static",
  "openssl",
- "rand 0.7.3",
+ "rand 0.8.5",
  "reqwest",
  "serde",
  "serde_json",
@@ -2583,6 +2606,29 @@ name = "wasm-bindgen-shared"
 version = "0.2.80"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d554b7f530dee5964d9a9468d95c1f8b8acae4f282807e7d27d4b03099a46744"
+
+[[package]]
+name = "wasmedge-bindgen"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f1bae93d924a4646ccaeda139dec350205c89e9d5e13e9667423c0d641090a27"
+
+[[package]]
+name = "wasmedge-bindgen-macro"
+version = "0.1.14"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7c8504d8f1db51fb1b0222b725d34e0b48790e15f339abf7b4c9398c7489db2d"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
+
+[[package]]
+name = "wasmedge-wasi-helper"
+version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dd351a86b66f511cbeab0cb848cc9dbd06b4165689c2f992a74500fb809b19dd"
 
 [[package]]
 name = "web-sys"
