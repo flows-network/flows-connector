@@ -1,7 +1,7 @@
 use std::{env, net::SocketAddr, time::Duration};
 use lazy_static::lazy_static;
 use serde::{Serialize, Deserialize};
-use axum::{Router,routing::get, extract::Query, response::IntoResponse};
+use axum::{Router,routing::get, extract::Query, response::IntoResponse, http::{header}};
 use reqwest::{StatusCode, Client, ClientBuilder};
 use serde_json::Value;
 use openssl::rsa::{Rsa, Padding};
@@ -21,9 +21,10 @@ struct AuthBody {
 #[derive(Debug, Deserialize, Serialize)]
 struct OAuthAccessBody {
 	expires_in: Option<u32>,
-	token_type: Option<String>,
 	access_token: Option<String>,
-	refresh_token: Option<String>,
+	token_type: Option<String>,
+	id_token: Option<String>,
+	scope: Option<String>
 }
 
 fn encrypt(data: String) -> String {
@@ -66,21 +67,25 @@ fn new_http_client() -> Client {
 }
 
 async fn get_access_token(code:&str) -> Result<OAuthAccessBody, String>{
-	let form_client_id = env::var("FORM_APP_CLIENT_ID").expect("Env variable SLACK_APP_CLIENT_ID not set");
-	let form_client_secret = env::var("FORM_APP_CLIENT_SECRET").expect("Env variable SLACK_APP_CLIENT_SECRET not set");
+	println!("{}", code);
+	// let form_client_id = env::var("FORM_APP_CLIENT_ID").expect("Env variable SLACK_APP_CLIENT_ID not set");
+	// let form_client_secret = env::var("FORM_APP_CLIENT_SECRET").expect("Env variable SLACK_APP_CLIENT_SECRET not set");
 	let params = [
-		("client_id", form_client_id.as_str()),
-		("client_secret", form_client_secret.as_str()),
+		("client_id", "522267809353-naogc5pmqtc1nfdkg4m2p5gr1rj0f8r3.apps.googleusercontent.com"),
+		("client_secret", "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"),
 		("code", &code),
 		("grant_type",  "authorization_code"),
-		("redirect_uri", "https://reactor.secondstate.io")
+		("redirect_uri", "http://localhost:8091")
 	];
+	
 	let response = new_http_client().post("https://accounts.google.com/o/oauth2/token")
 		.form(&params)
 		.send()
 		.await;
+		println!("{:?}",response);
 	match response {
 		Ok(r) => {
+			println!("{:?}", r);
 			let oauth_body = r.json::<OAuthAccessBody>().await;
 			match oauth_body {
 				Ok(at) => {
@@ -91,7 +96,8 @@ async fn get_access_token(code:&str) -> Result<OAuthAccessBody, String>{
 				}
 			}
 		},
-		Err(_) => {
+		Err(a) => {
+			println!("{:?}", a);
 			Err("Failed to get access token".to_string())
 		}
 	}
@@ -124,7 +130,7 @@ async fn get_authed_user(access_token: &str) -> Result<String, String>{
 #[tokio::main]
 async fn main() {
 	let app = Router::new().route("/auth", get(auth));
-	let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
+	let port = env::var("PORT").unwrap_or_else(|_| "8091".to_string());
 	let port:u16 = port.parse::<u16>().unwrap();
 	let addr = SocketAddr::from(([127, 0, 0, 1], port));
 	axum::Server::bind(&addr)
