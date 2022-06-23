@@ -1,10 +1,43 @@
-use wasmedge_wasi_helper::wasmedge_wasi_helper::_initialize;
-
 #[allow(unused_imports)]
 use wasmedge_bindgen::*;
 use wasmedge_bindgen_macro::*;
 
+use std::{
+	env,
+};
+use regex::Regex;
+use lazy_static::lazy_static;
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+use rsa::{PublicKey, RsaPrivateKey, RsaPublicKey, PaddingScheme};
+use url::form_urlencoded::parse;
+
+static RSA_BITS: usize = 2048;
+
+lazy_static! {
+	static ref HAIKU_API_PREFIX: String = env::var("HAIKU_API_PREFIX").expect("Env variable HAIKU_API_PREFIX not set");
+	static ref RSA_RAND_SEED: [u8; 32] = env::var("RSA_RAND_SEED").expect("Env variable RSA_RAND_SEED not set").as_bytes().try_into().unwrap();
+	static ref CHACHA8RNG: ChaCha8Rng = ChaCha8Rng::from_seed(*RSA_RAND_SEED);
+	static ref PRIV_KEY: RsaPrivateKey = RsaPrivateKey::new(&mut CHACHA8RNG.clone(), RSA_BITS).expect("failed to generate a key");
+	static ref PUB_KEY: RsaPublicKey = RsaPublicKey::from(&*PRIV_KEY);
+}
+
 static CONNECT_HTML: &str = include_str!("../../src/connect.html");
+
+fn encrypt(data: &str) -> String {
+	hex::encode(PUB_KEY.encrypt(&mut CHACHA8RNG.clone(), PaddingScheme::new_pkcs1v15_encrypt(), data.as_bytes()).expect("failed to encrypt"))
+}
+
+fn decrypt(data: &str) -> String {
+	String::from_utf8(PRIV_KEY.decrypt(PaddingScheme::new_pkcs1v15_encrypt(), &hex::decode(data).unwrap()).expect("failed to decrypt")).unwrap()
+}
+
+/// Init PRIV_KEY for its slow generation time
+#[wasmedge_bindgen]
+pub fn init() {
+	_ = encrypt("");
+	println!("Keys has been initialized");
+}
 
 /// Return a connect html
 /// 
@@ -13,10 +46,51 @@ static CONNECT_HTML: &str = include_str!("../../src/connect.html");
 /// 
 /// Return (status: u32, headers: JSON string, body: Vec<u8>)
 #[wasmedge_bindgen]
-pub fn connect(headers: String, queries: String) -> (u16, String, Vec<u8>) {
+pub fn connect(headers: String, queries: String, body: Vec<u8>) -> (u16, String, Vec<u8>) {
 	let headers = serde_json::json!({
 		"Content-Type": "text/html"
 	});
 	let headers = serde_json::to_string(&headers).unwrap();
 	return (200, headers, CONNECT_HTML.as_bytes().to_vec());
+}
+
+#[wasmedge_bindgen]
+pub fn auth(headers: String, queries: String, body: Vec<u8>) -> (u16, String, Vec<u8>) {
+	let parsed_form = parse(&body);
+	let (sender_email, api_key) = parsed_form.into_iter().fold((None, None), |accu, x| {
+		if x.0.eq("sender_email") {
+			return (Some(x.1.into_owned()), accu.1);
+		} else if x.0.eq("api_key") {
+			return (accu.0, Some(x.1.into_owned()));
+		}
+		return accu;
+	});
+
+	if sender_email.is_none() || api_key.is_none() {
+		return (400, String::new(), String::from("Params are required").as_bytes().to_vec());
+	}
+	let sender_email = sender_email.unwrap();
+	let api_key = api_key.unwrap();
+
+	let email_regex = Regex::new(r#"^(([^<>()\[\]\\.,;:\s@"]+(\.[^<>()\[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$"#).unwrap();
+	if !email_regex.is_match(&sender_email.to_lowercase()) {
+		return (400, String::new(), String::from("Invalid email").as_bytes().to_vec());
+	}
+	let api_key_regex = Regex::new(r"^.{50,}$").unwrap();
+	if !api_key_regex.is_match(&api_key) {
+		return (400, String::new(), String::from("Invalid api key").as_bytes().to_vec());
+	}
+	let location = format!(
+		"{}/api/connected?authorId={}&authorName={}&authorState={}",
+		HAIKU_API_PREFIX.as_str(),
+		sender_email,
+		sender_email,
+		encrypt(&api_key)
+	);
+	
+	let headers = serde_json::json!({
+		"Location": location
+	});
+	let headers = serde_json::to_string(&headers).unwrap();
+	(302, headers, Vec::new())
 }
