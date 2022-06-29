@@ -391,10 +391,10 @@ async fn upload_msg(ContentLengthLimit(mut multipart): ContentLengthLimit<Multip
 
 		if text.len() > 0 {
 			tokio::spawn(post_msg(Json::from(PostBody {
-				user: user,
-				state: state,
-				text: text,
-				forwards: forwards,
+				user,
+				state,
+				text,
+				forwards,
 			})));
 		}
 	});
@@ -439,7 +439,7 @@ struct RouteReq {
 
 async fn get_channels(access_token: &str, cursor: String) -> Result<Channels, String> {
 	let response = new_http_client()
-		.get(format!("https://slack.com/api/conversations.list?limit={}&cursor={}&types=public_channel,im", CHANNELS_PER_PAGE, cursor))
+		.get(format!("https://slack.com/api/conversations.list?limit={}&cursor={}&types=public_channel,private_channel,im", CHANNELS_PER_PAGE, cursor))
 		.bearer_auth(access_token)
 		.send()
 		.await;
@@ -483,7 +483,7 @@ async fn route_channels(Json(body): Json<RouteReq>) -> impl IntoResponse {
 				} else if ch.is_im.is_some() && ch.is_im.unwrap() {
 					if ch.user.is_some() && ch.user.take().unwrap().eq(&body.user) {
 						return Some(serde_json::json!({
-							"field": "Reactor App",
+							"field": "Direct Message with App",
 							"value": ch.id
 						}));
 					}
@@ -521,25 +521,17 @@ struct JoinChannelReq {
 async fn join_channel(Json(req): Json<JoinChannelReq>) -> impl IntoResponse {
 	let access_token = decrypt(req.state);
 
-	match view_channel(&access_token, &req.value).await {
-		Some(ch) => {
-			if ch.is_channel.is_some() && ch.is_channel.unwrap() &&
-				(ch.is_member.is_some() && !ch.is_member.unwrap()) {
-				match join_channel_inner(&req.value, &access_token).await {
-					Ok(v) => {
-						return Ok((StatusCode::CREATED, Json(v)));
-					}
-					Err(err_msg) => {
-						return Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg));
-					}
-				}
-			} else {
-				return Ok((StatusCode::OK, Json(())));
+	return match view_channel(&access_token, &req.value).await {
+		Some(ch) => if ch.is_channel.is_some() && ch.is_channel.unwrap() &&
+			(ch.is_member.is_some() && !ch.is_member.unwrap()) {
+			match join_channel_inner(&req.value, &access_token).await {
+				Ok(v) => Ok((StatusCode::CREATED, Json(v))),
+				Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
 			}
-		}
-		None => {
-			return Err((StatusCode::BAD_REQUEST, "Channel not found".to_string()));
-		}
+		} else {
+			Ok((StatusCode::OK, Json(())))
+		},
+		None => Err((StatusCode::BAD_REQUEST, "Channel not found".to_string()))
 	}
 }
 

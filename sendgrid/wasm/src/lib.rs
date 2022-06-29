@@ -1,20 +1,17 @@
 #[allow(unused_imports)]
 use wasmedge_bindgen::*;
 use wasmedge_bindgen_macro::*;
-use wasmhaiku_host::{request, RequestMethod};
+use wasmhaiku_host::{async_request, RequestMethod};
 
-use std::{
-	env,
-	collections::HashMap,
-};
+use std::{collections::HashMap, env};
 
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-use regex::Regex;
 use lazy_static::lazy_static;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use rsa::{PublicKey, RsaPrivateKey, RsaPublicKey, PaddingScheme};
+use regex::Regex;
+use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 use url::form_urlencoded::parse;
 
 static RSA_BITS: usize = 2048;
@@ -32,25 +29,41 @@ lazy_static! {
 static CONNECT_HTML: &str = include_str!("../../src/connect.html");
 
 fn encrypt(data: &str) -> String {
-	hex::encode(PUB_KEY.encrypt(&mut CHACHA8RNG.clone(), PaddingScheme::new_pkcs1v15_encrypt(), data.as_bytes()).expect("failed to encrypt"))
+	hex::encode(
+		PUB_KEY
+			.encrypt(
+				&mut CHACHA8RNG.clone(),
+				PaddingScheme::new_pkcs1v15_encrypt(),
+				data.as_bytes(),
+			)
+			.expect("failed to encrypt"),
+	)
 }
 
 fn decrypt(data: &str) -> String {
-	String::from_utf8(PRIV_KEY.decrypt(PaddingScheme::new_pkcs1v15_encrypt(), &hex::decode(data).unwrap()).expect("failed to decrypt")).unwrap()
+	String::from_utf8(
+		PRIV_KEY
+			.decrypt(
+				PaddingScheme::new_pkcs1v15_encrypt(),
+				&hex::decode(data).unwrap(),
+			)
+			.expect("failed to decrypt"),
+	)
+	.unwrap()
 }
 
 #[wasmedge_bindgen]
 pub fn init() {
 	/// Init PRIV_KEY for its slow generation time
-	_ = encrypt("");
+	encrypt("");
 	println!("Keys has been initialized");
 }
 
 /// Return a connect html
-/// 
+///
 /// headers is a JSON string
 /// queries is a JSON string
-/// 
+///
 /// Return (status: u32, headers: JSON string, body: Vec<u8>)
 #[wasmedge_bindgen]
 pub fn connect(headers: String, queries: String, body: Vec<u8>) -> (u16, String, Vec<u8>) {
@@ -74,18 +87,30 @@ pub fn auth(headers: String, queries: String, body: Vec<u8>) -> (u16, String, Ve
 	});
 
 	if sender_email.is_none() || api_key.is_none() {
-		return (400, String::new(), String::from("Params are required").as_bytes().to_vec());
+		return (
+			400,
+			String::new(),
+			String::from("Params are required").as_bytes().to_vec(),
+		);
 	}
 	let sender_email = sender_email.unwrap();
 	let api_key = api_key.unwrap();
 
 	let email_regex = Regex::new(r#"^(([^<>()\[\]\\.,;:\s@"]+(\.[^<>()\[\]\\.,;:\s@"]+)*)|(".+"))@((\[[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\])|(([a-zA-Z\-0-9]+\.)+[a-zA-Z]{2,}))$"#).unwrap();
 	if !email_regex.is_match(&sender_email.to_lowercase()) {
-		return (400, String::new(), String::from("Invalid email").as_bytes().to_vec());
+		return (
+			400,
+			String::new(),
+			String::from("Invalid email").as_bytes().to_vec(),
+		);
 	}
 	let api_key_regex = Regex::new(r"^.{50,}$").unwrap();
 	if !api_key_regex.is_match(&api_key) {
-		return (400, String::new(), String::from("Invalid api key").as_bytes().to_vec());
+		return (
+			400,
+			String::new(),
+			String::from("Invalid api key").as_bytes().to_vec(),
+		);
 	}
 	let location = format!(
 		"{}/api/connected?authorId={}&authorName={}&authorState={}",
@@ -94,15 +119,11 @@ pub fn auth(headers: String, queries: String, body: Vec<u8>) -> (u16, String, Ve
 		sender_email,
 		encrypt(&api_key)
 	);
-	
-	let headers = serde_json::json!({
-		"Location": location
-	});
+
+	let headers = serde_json::json!({ "Location": location });
 	let headers = serde_json::to_string(&headers).unwrap();
 	(302, headers, Vec::new())
 }
-
-
 
 #[derive(Debug, Serialize, Deserialize)]
 struct MailBody {
@@ -119,17 +140,15 @@ struct PostBody {
 }
 
 #[wasmedge_bindgen]
-pub fn post(headers: String, queries: String, body: Vec<u8>) -> (u16, String, Vec<u8>) {
+pub fn post(_: String, _: String, body: Vec<u8>) -> (u16, String, Vec<u8>) {
 	let pb: PostBody = match serde_json::from_slice(&body) {
-		Ok(b) => {
-			b
-		}
+		Ok(b) => b,
 		Err(_) => {
 			return (400, String::new(), "Invalid body".as_bytes().to_vec());
 		}
 	};
 
-	match serde_json::from_str::<MailBody>(&pb.text) {
+	return match serde_json::from_str::<MailBody>(&pb.text) {
 		Ok(mb) => {
 			let req_body = serde_json::json!({
 				"personalizations": [
@@ -158,21 +177,16 @@ pub fn post(headers: String, queries: String, body: Vec<u8>) -> (u16, String, Ve
 			headers.insert("Authorization", format!("Bearer {}", decrypt(&pb.state)));
 			headers.insert("Content-Type", String::from("application/json"));
 
-			match request(
+			match async_request(
 				String::from("https://api.sendgrid.com/v3/mail/send"),
 				RequestMethod::POST,
 				headers,
-				req_body) {
-				Ok(_) => {
-					return (200, String::new(), vec![]);
-				},
-				Err(e) => {
-					return (500, String::new(), e.as_bytes().to_vec());
-				}
+				req_body,
+			) {
+				Ok(_) => (200, String::new(), vec![]),
+				Err(e) => (500, String::new(), e.as_bytes().to_vec()),
 			}
 		}
-		Err(_) => {
-			return (400, String::new(), "Invalid mail body".as_bytes().to_vec());
-		}
-	}
+		Err(_) => (400, String::new(), "Invalid mail body".as_bytes().to_vec()),
+	};
 }
