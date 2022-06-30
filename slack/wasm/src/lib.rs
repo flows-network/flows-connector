@@ -25,8 +25,8 @@ lazy_static! {
 	static ref HAIKU_API_PREFIX: String = String::from("http://127.0.0.1:3000");
 	static ref RSA_RAND_SEED: [u8; 32] = "wWuE6hfm7mMCjq$2eefEv2Y@2aeLYNUn".as_bytes().try_into().unwrap();
 	static ref HAIKU_AUTH_TOKEN: String = String::from("2b72aea305fd3ac2dd1f903fb1dbdf050c113aca");
-	static ref SLACK_APP_CLIENT_ID: String = String::from("3029929096563.3015312061287");
-	static ref SLACK_APP_CLIENT_SECRET: String = String::from("b441d2041ab46bd0664b5f7a45eaeebd");
+	static ref SLACK_APP_CLIENT_ID: String = String::from("");
+	static ref SLACK_APP_CLIENT_SECRET: String = String::from("");
 
 	static ref CHACHA8RNG: ChaCha8Rng = ChaCha8Rng::from_seed(*RSA_RAND_SEED);
 	static ref PRIV_KEY: RsaPrivateKey = RsaPrivateKey::new(&mut CHACHA8RNG.clone(), RSA_BITS).expect("failed to generate a key");
