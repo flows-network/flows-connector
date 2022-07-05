@@ -1,27 +1,31 @@
-use std::env;
-use std::time::Duration;
-use std::net::SocketAddr;
-use serde::{Serialize, Deserialize};
-use serde_json::Value;
-use lazy_static::lazy_static;
-use openssl::rsa::{Rsa, Padding};
-use reqwest::{Client, ClientBuilder, multipart};
 use axum::{
-	Router,
-	routing::{get, post},
-	extract::{Query, Json},
-	response::{IntoResponse},
-	http::{StatusCode},
 	extract::{ContentLengthLimit, Multipart},
+	extract::{Json, Query},
+	http::StatusCode,
+	response::IntoResponse,
+	routing::{get, post},
+	Router,
 };
+use lazy_static::lazy_static;
+use openssl::rsa::{Padding, Rsa};
+use reqwest::{multipart, Client, ClientBuilder};
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use std::env;
+use std::net::SocketAddr;
+use std::time::Duration;
 
 lazy_static! {
-	static ref REACTOR_API_PREFIX: String = env::var("REACTOR_API_PREFIX").expect("Env variable REACTOR_API_PREFIX not set");
-	static ref REACTOR_AUTH_TOKEN: String = env::var("REACTOR_AUTH_TOKEN").expect("Env variable REACTOR_AUTH_TOKEN not set");
-
-	static ref PASSPHRASE: String = env::var("PASSPHRASE").expect("Env variable PASSPHRASE not set");
-	static ref PUBLIC_KEY_PEM: String = env::var("PUBLIC_KEY_PEM").expect("Env variable PUBLIC_KEY_PEM not set");
-	static ref PRIVATE_KEY_PEM: String = env::var("PRIVATE_KEY_PEM").expect("Env variable PRIVATE_KEY_PEM not set");
+	static ref REACTOR_API_PREFIX: String =
+		env::var("REACTOR_API_PREFIX").expect("Env variable REACTOR_API_PREFIX not set");
+	static ref REACTOR_AUTH_TOKEN: String =
+		env::var("REACTOR_AUTH_TOKEN").expect("Env variable REACTOR_AUTH_TOKEN not set");
+	static ref PASSPHRASE: String =
+		env::var("PASSPHRASE").expect("Env variable PASSPHRASE not set");
+	static ref PUBLIC_KEY_PEM: String =
+		env::var("PUBLIC_KEY_PEM").expect("Env variable PUBLIC_KEY_PEM not set");
+	static ref PRIVATE_KEY_PEM: String =
+		env::var("PRIVATE_KEY_PEM").expect("Env variable PRIVATE_KEY_PEM not set");
 }
 
 const TIMEOUT: u64 = 120;
@@ -34,14 +38,19 @@ fn new_http_client() -> Client {
 fn encrypt(data: String) -> String {
 	let rsa = Rsa::public_key_from_pem(PUBLIC_KEY_PEM.as_bytes()).unwrap();
 	let mut buf: Vec<u8> = vec![0; rsa.size() as usize];
-	rsa.public_encrypt(data.as_bytes(), &mut buf, Padding::PKCS1).unwrap();
+	rsa.public_encrypt(data.as_bytes(), &mut buf, Padding::PKCS1)
+		.unwrap();
 	hex::encode(buf)
 }
 
 fn decrypt(hex: String) -> String {
-	let rsa = Rsa::private_key_from_pem_passphrase(PRIVATE_KEY_PEM.as_bytes(), PASSPHRASE.as_bytes()).unwrap();
+	let rsa =
+		Rsa::private_key_from_pem_passphrase(PRIVATE_KEY_PEM.as_bytes(), PASSPHRASE.as_bytes())
+			.unwrap();
 	let mut buf: Vec<u8> = vec![0; rsa.size() as usize];
-	let l = rsa.private_decrypt(&hex::decode(hex).unwrap(), &mut buf, Padding::PKCS1).unwrap();
+	let l = rsa
+		.private_decrypt(&hex::decode(hex).unwrap(), &mut buf, Padding::PKCS1)
+		.unwrap();
 	String::from_utf8(buf[..l].to_vec()).unwrap()
 }
 
@@ -83,28 +92,31 @@ async fn auth(Query(auth_body): Query<AuthBody>) -> impl IntoResponse {
 							);
 							Ok((StatusCode::FOUND, [("Location", location)]))
 						}
-						Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
+						Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
 					}
 				} else {
 					Err((StatusCode::BAD_REQUEST, "Invalid code".to_string()))
 				}
-			},
-			Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
+			}
+			Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
 		}
 	}
 }
 
 async fn get_access_token(code: &str) -> Result<OAuthAccessBody, String> {
-	let slack_client_id = env::var("SLACK_APP_CLIENT_ID").expect("Env variable SLACK_APP_CLIENT_ID not set");
-	let slack_client_secret = env::var("SLACK_APP_CLIENT_SECRET").expect("Env variable SLACK_APP_CLIENT_SECRET not set");
+	let slack_client_id =
+		env::var("SLACK_APP_CLIENT_ID").expect("Env variable SLACK_APP_CLIENT_ID not set");
+	let slack_client_secret =
+		env::var("SLACK_APP_CLIENT_SECRET").expect("Env variable SLACK_APP_CLIENT_SECRET not set");
 
 	let params = [
 		("client_id", slack_client_id.as_str()),
 		("client_secret", slack_client_secret.as_str()),
-		("code", &code)
+		("code", &code),
 	];
 
-	let response = new_http_client().post("https://slack.com/api/oauth.v2.access")
+	let response = new_http_client()
+		.post("https://slack.com/api/oauth.v2.access")
 		.form(&params)
 		.send()
 		.await;
@@ -112,44 +124,33 @@ async fn get_access_token(code: &str) -> Result<OAuthAccessBody, String> {
 		Ok(r) => {
 			let oauth_body = r.json::<OAuthAccessBody>().await;
 			match oauth_body {
-				Ok(at) => {
-					Ok(at)
-				}
-				Err(_) => {
-					Err("Failed to get access token".to_string())
-				}
+				Ok(at) => Ok(at),
+				Err(_) => Err("Failed to get access token".to_string()),
 			}
-		},
-		Err(_) => {
-			Err("Failed to get access token".to_string())
 		}
+		Err(_) => Err("Failed to get access token".to_string()),
 	}
 }
 
 async fn get_authed_user(access_token: &str) -> Result<String, String> {
-	let response = new_http_client().get("https://slack.com/api/users.profile.get")
+	let response = new_http_client()
+		.get("https://slack.com/api/users.profile.get")
 		.bearer_auth(access_token)
 		.send()
 		.await;
 
 	match response {
-		Ok(res) => {
-			match res.text().await {
-				Ok(body) => {
-					if let Ok(v) = serde_json::from_str::<Value>(&body) {
-						Ok(v["profile"]["real_name"].as_str().unwrap().to_string())
-					} else {
-						Err("Failed to get user's name".to_string())
-					}
-				}
-				Err(_) => {
-					Err("Failed to get user's profile".to_string())
+		Ok(res) => match res.text().await {
+			Ok(body) => {
+				if let Ok(v) = serde_json::from_str::<Value>(&body) {
+					Ok(v["profile"]["real_name"].as_str().unwrap().to_string())
+				} else {
+					Err("Failed to get user's name".to_string())
 				}
 			}
-		}
-		Err(_) => {
-			Err("Failed to get user's profile".to_string())
-		}
+			Err(_) => Err("Failed to get user's profile".to_string()),
+		},
+		Err(_) => Err("Failed to get user's profile".to_string()),
 	}
 }
 
@@ -178,7 +179,7 @@ struct File {
 
 async fn _capture_event_body(b: axum::body::Bytes) -> impl IntoResponse {
 	let s = String::from_utf8_lossy(&b.to_vec()).into_owned();
-	let v: Value= serde_json::from_str(&s).unwrap();
+	let v: Value = serde_json::from_str(&s).unwrap();
 	println!("{}", serde_json::to_string_pretty(&v).unwrap());
 	(StatusCode::OK, String::new())
 }
@@ -212,43 +213,49 @@ async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, cha
 			}
 		});
 
-		_ = new_http_client().post(format!("{}/api/_funcs/_post", REACTOR_API_PREFIX.as_str()))
+		let _ = new_http_client()
+			.post(format!("{}/api/_funcs/_post", REACTOR_API_PREFIX.as_str()))
 			.header("Authorization", REACTOR_AUTH_TOKEN.as_str())
 			.json(&request)
 			.send()
 			.await;
-	} else {
-		if let Ok(access_token) = get_author_token_from_reactor(&user).await {
-			let mut request = multipart::Form::new()
-				.text("user", user)
-				.text("text", text)
-				.text("triggers", format!(r#"{{"channels": "{}"}}"#, channel));
+	} else if let Ok(access_token) = get_author_token_from_reactor(&user).await {
+		let mut request = multipart::Form::new()
+			.text("user", user)
+			.text("text", text)
+			.text("triggers", format!(r#"{{"channels": "{}"}}"#, channel));
 
-			for f in files.into_iter() {
-				if let Ok(b) = get_file(&access_token, &f.url_private).await {
-					if let Ok(part) = multipart::Part::bytes(b)
-						.file_name(f.name)
-						.mime_str(&f.mimetype) {
-						request = request.part("file", part);
-					}
+		for f in files.into_iter() {
+			if let Ok(b) = get_file(&access_token, &f.url_private).await {
+				if let Ok(part) = multipart::Part::bytes(b)
+					.file_name(f.name)
+					.mime_str(&f.mimetype)
+				{
+					request = request.part("file", part);
 				}
 			}
-
-			_ = new_http_client().post(format!("{}/api/_funcs/_upload", REACTOR_API_PREFIX.as_str()))
-				.header("Authorization", REACTOR_AUTH_TOKEN.as_str())
-				.multipart(request)
-				.send()
-				.await;
 		}
+
+		let _ = new_http_client()
+			.post(format!(
+				"{}/api/_funcs/_upload",
+				REACTOR_API_PREFIX.as_str()
+			))
+			.header("Authorization", REACTOR_AUTH_TOKEN.as_str())
+			.multipart(request)
+			.send()
+			.await;
 	}
 }
 
 async fn get_author_token_from_reactor(user: &str) -> Result<String, ()> {
-	let request = serde_json::json!({
-		"author": user
-	});
+	let request = serde_json::json!({ "author": user });
 
-	let response = new_http_client().post(format!("{}/api/_funcs/_author_state", REACTOR_API_PREFIX.as_str()))
+	let response = new_http_client()
+		.post(format!(
+			"{}/api/_funcs/_author_state",
+			REACTOR_API_PREFIX.as_str()
+		))
 		.header("Authorization", REACTOR_AUTH_TOKEN.as_str())
 		.json(&request)
 		.send()
@@ -265,11 +272,12 @@ async fn get_author_token_from_reactor(user: &str) -> Result<String, ()> {
 }
 
 async fn get_file(access_token: &str, url_private: &str) -> Result<Vec<u8>, ()> {
-	let response = new_http_client().get(url_private)
+	let response = new_http_client()
+		.get(url_private)
 		.bearer_auth(access_token)
 		.send()
 		.await;
-	
+
 	if let Ok(res) = response {
 		if res.status().is_success() {
 			if let Ok(body) = res.bytes().await {
@@ -295,7 +303,9 @@ struct PostBody {
 	forwards: Vec<ForwardRoute>,
 }
 
-async fn post_msg(Json(msg_body): Json<PostBody>) -> Result<StatusCode, (StatusCode, &'static str)> {
+async fn post_msg(
+	Json(msg_body): Json<PostBody>,
+) -> Result<StatusCode, (StatusCode, &'static str)> {
 	tokio::spawn(async move {
 		for pb in msg_body.forwards.iter() {
 			if pb.route.eq("channels") {
@@ -304,10 +314,13 @@ async fn post_msg(Json(msg_body): Json<PostBody>) -> Result<StatusCode, (StatusC
 					"text": msg_body.text,
 				});
 
-				tokio::spawn(new_http_client().post("https://slack.com/api/chat.postMessage")
-					.bearer_auth(decrypt(msg_body.state.clone()))
-					.json(&request)
-					.send());
+				tokio::spawn(
+					new_http_client()
+						.post("https://slack.com/api/chat.postMessage")
+						.bearer_auth(decrypt(msg_body.state.clone()))
+						.json(&request)
+						.send(),
+				);
 			}
 		}
 	});
@@ -316,7 +329,8 @@ async fn post_msg(Json(msg_body): Json<PostBody>) -> Result<StatusCode, (StatusC
 }
 
 async fn upload_file_to_slack(form: multipart::Form, access_token: String) {
-	let response = new_http_client().post("https://slack.com/api/files.upload")
+	let response = new_http_client()
+		.post("https://slack.com/api/files.upload")
 		.bearer_auth(decrypt(access_token))
 		.multipart(form)
 		.send()
@@ -328,8 +342,14 @@ async fn upload_file_to_slack(form: multipart::Form, access_token: String) {
 	}
 }
 
-
-async fn upload_msg(ContentLengthLimit(mut multipart): ContentLengthLimit<Multipart, {10 * 1024 * 1024 /* 250mb */},>) -> impl IntoResponse {
+async fn upload_msg(
+	ContentLengthLimit(mut multipart): ContentLengthLimit<
+		Multipart,
+		{
+			10 * 1024 * 1024 /* 250mb */
+		},
+	>,
+) -> impl IntoResponse {
 	tokio::spawn(async move {
 		let mut user = String::new();
 		let mut text = String::new();
@@ -346,7 +366,8 @@ async fn upload_msg(ContentLengthLimit(mut multipart): ContentLengthLimit<Multip
 					let data = field.bytes().await.unwrap();
 					if let Ok(part) = multipart::Part::bytes(data.to_vec())
 						.file_name(file_name)
-						.mime_str(&content_type) {
+						.mime_str(&content_type)
+					{
 						parts.push(part);
 					}
 				}
@@ -382,8 +403,7 @@ async fn upload_msg(ContentLengthLimit(mut multipart): ContentLengthLimit<Multip
 
 		if parts.len() > 0 {
 			for part in parts.into_iter() {
-				let mut form = multipart::Form::new()
-					.text("channels", user.clone());
+				let mut form = multipart::Form::new().text("channels", user.clone());
 				form = form.part("file", part);
 				upload_file_to_slack(form, state.clone()).await;
 			}
@@ -428,7 +448,7 @@ struct RespMeta {
 struct Channels {
 	ok: bool,
 	channels: Vec<Channel>,
-	response_metadata: RespMeta
+	response_metadata: RespMeta,
 }
 #[derive(Deserialize)]
 struct RouteReq {
@@ -455,7 +475,10 @@ async fn get_channels(access_token: &str, cursor: String) -> Result<Channels, St
 
 async fn view_channel(access_token: &str, channel: &str) -> Option<Channel> {
 	let response = new_http_client()
-		.get(format!("https://slack.com/api/conversations.info?channel={}", channel))
+		.get(format!(
+			"https://slack.com/api/conversations.info?channel={}",
+			channel
+		))
 		.bearer_auth(access_token)
 		.send()
 		.await;
@@ -474,28 +497,30 @@ async fn route_channels(Json(body): Json<RouteReq>) -> impl IntoResponse {
 	let cursor = body.cursor.unwrap_or_default();
 	match get_channels(&access_token, cursor).await {
 		Ok(mut chs) => {
-			let rs: Vec<Value> = chs.channels.iter_mut().filter_map(|ch| {
-				if ch.is_channel.is_some() && ch.is_channel.unwrap() {
-					return Some(serde_json::json!({
-						"field": format!("# {}", ch.name.take().unwrap_or_else(|| "no name".to_string())),
-						"value": ch.id
-					}));
-				} else if ch.is_im.is_some() && ch.is_im.unwrap() {
-					if ch.user.is_some() && ch.user.take().unwrap().eq(&body.user) {
+			let rs: Vec<Value> = chs
+				.channels
+				.iter_mut()
+				.filter_map(|ch| {
+					if ch.is_channel.is_some() && ch.is_channel.unwrap() {
+						return Some(serde_json::json!({
+							"field": format!("# {}", ch.name.take().unwrap_or_else(|| "no name".to_string())),
+							"value": ch.id
+						}));
+					} else if ch.is_im.is_some()
+						&& ch.is_im.unwrap() && ch.user.is_some()
+						&& ch.user.take().unwrap().eq(&body.user)
+					{
 						return Some(serde_json::json!({
 							"field": "Direct Message with App",
 							"value": ch.id
 						}));
 					}
-				}
-				return None;
-			})
-			.collect();
+					None
+				})
+				.collect();
 			let result = match chs.response_metadata.next_cursor.as_str() {
 				"" => {
-					serde_json::json!({
-						"list": rs
-					})
+					serde_json::json!({ "list": rs })
 				}
 				s => {
 					serde_json::json!({
@@ -506,14 +531,14 @@ async fn route_channels(Json(body): Json<RouteReq>) -> impl IntoResponse {
 			};
 			Ok(Json(result))
 		}
-		Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
+		Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
 	}
 }
 
 #[derive(Debug, Deserialize)]
 struct JoinChannelReq {
 	// user: String,
-    state: String,
+	state: String,
 	// field: String,
 	value: String,
 }
@@ -522,24 +547,27 @@ async fn join_channel(Json(req): Json<JoinChannelReq>) -> impl IntoResponse {
 	let access_token = decrypt(req.state);
 
 	return match view_channel(&access_token, &req.value).await {
-		Some(ch) => if ch.is_channel.is_some() && ch.is_channel.unwrap() &&
-			(ch.is_member.is_some() && !ch.is_member.unwrap()) {
-			match join_channel_inner(&req.value, &access_token).await {
-				Ok(v) => Ok((StatusCode::CREATED, Json(v))),
-				Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg))
+		Some(ch) => {
+			if ch.is_channel.is_some()
+				&& ch.is_channel.unwrap()
+				&& (ch.is_member.is_some() && !ch.is_member.unwrap())
+			{
+				match join_channel_inner(&req.value, &access_token).await {
+					Ok(v) => Ok((StatusCode::CREATED, Json(v))),
+					Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
+				}
+			} else {
+				Ok((StatusCode::OK, Json(())))
 			}
-		} else {
-			Ok((StatusCode::OK, Json(())))
-		},
-		None => Err((StatusCode::BAD_REQUEST, "Channel not found".to_string()))
-	}
+		}
+		None => Err((StatusCode::BAD_REQUEST, "Channel not found".to_string())),
+	};
 }
 
 async fn join_channel_inner(channel: &str, access_token: &str) -> Result<(), String> {
-	let param = serde_json::json!({
-		"channel": channel
-	});
-	let response = new_http_client().post(format!("https://slack.com/api/conversations.join"))
+	let param = serde_json::json!({ "channel": channel });
+	let response = new_http_client()
+		.post(format!("https://slack.com/api/conversations.join"))
 		.bearer_auth(access_token)
 		.json(&param)
 		.send()
@@ -553,7 +581,6 @@ async fn join_channel_inner(channel: &str, access_token: &str) -> Result<(), Str
 						return Ok(());
 					}
 				}
-				
 			}
 		}
 	}

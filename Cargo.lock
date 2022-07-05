@@ -1993,8 +1993,8 @@ dependencies = [
  "serde",
  "serde_json",
  "url",
- "wasmedge-bindgen",
- "wasmedge-bindgen-macro",
+ "wasmedge-bindgen 0.1.14 (registry+https://github.com/rust-lang/crates.io-index)",
+ "wasmedge-bindgen-macro 0.1.14 (registry+https://github.com/rust-lang/crates.io-index)",
  "wasmhaiku-host",
 ]
 
@@ -2124,8 +2124,8 @@ dependencies = [
  "serde_json",
  "serde_urlencoded",
  "url",
- "wasmedge-bindgen",
- "wasmedge-bindgen-macro",
+ "wasmedge-bindgen 0.1.14",
+ "wasmedge-bindgen-macro 0.1.14",
  "wasmhaiku-host",
 ]
 
@@ -2796,8 +2796,21 @@ checksum = "d554b7f530dee5964d9a9468d95c1f8b8acae4f282807e7d27d4b03099a46744"
 [[package]]
 name = "wasmedge-bindgen"
 version = "0.1.14"
+
+[[package]]
+name = "wasmedge-bindgen"
+version = "0.1.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f1bae93d924a4646ccaeda139dec350205c89e9d5e13e9667423c0d641090a27"
+
+[[package]]
+name = "wasmedge-bindgen-macro"
+version = "0.1.14"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "wasmedge-bindgen-macro"

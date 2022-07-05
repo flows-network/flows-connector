@@ -144,7 +144,7 @@ pub fn post(_: String, _: String, body: Vec<u8>) -> (u16, String, Vec<u8>) {
 	let pb: PostBody = match serde_json::from_slice(&body) {
 		Ok(b) => b,
 		Err(_) => {
-			return (400, String::new(), "Invalid body".as_bytes().to_vec());
+			return (400, String::new(), b"Invalid body".to_vec());
 		}
 	};
 
@@ -187,6 +187,6 @@ pub fn post(_: String, _: String, body: Vec<u8>) -> (u16, String, Vec<u8>) {
 				Err(e) => (500, String::new(), e.as_bytes().to_vec()),
 			}
 		}
-		Err(_) => (400, String::new(), "Invalid mail body".as_bytes().to_vec()),
+		Err(_) => (400, String::new(), b"Invalid mail body".to_vec()),
 	};
 }
