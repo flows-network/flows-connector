@@ -47,6 +47,21 @@ pub fn event(headers: String, queries: String, body: Vec<u8>) -> (u16, String, V
 		return (200, String::new(), challenge.as_bytes().to_vec());
 	}
 
+	(100, String::new(), vec![])
+}
+
+#[wasmedge_bindgen]
+pub fn async_event(headers: String, queries: String, body: Vec<u8>) -> (u16, String, Vec<u8>) {
+	let evt_body: EventBody = match serde_json::from_slice(&body) {
+		Ok(s) => s,
+		Err(_) => return (400, String::from("Invalid input"), vec![]),
+	};
+
+	// For slack to verify
+	if let Some(challenge) = evt_body.challenge {
+		return (200, String::new(), challenge.as_bytes().to_vec());
+	}
+
 	if let Some(evt) = evt_body.event {
 		// Only handle message which is sent by user
 		if evt.bot_id.is_none() {
