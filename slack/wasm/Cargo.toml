@@ -21,7 +21,7 @@ hex = "0.4.0"
 url = "2"
 rand = "0.8"
 rand_chacha = "0.3"
-wasmedge-bindgen = { path = "../../../wasmedge-bindgen/bindgen/rust/wasm" }
-wasmedge-bindgen-macro = { path = "../../../wasmedge-bindgen/bindgen/rust/macro" }
+wasmedge-bindgen = "0.4"
+wasmedge-bindgen-macro = "0.4"
 
 wasmhaiku-host = { path = "../../../wasmhaiku-host" }

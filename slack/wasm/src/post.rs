@@ -3,7 +3,7 @@ use wasmedge_bindgen::*;
 use wasmedge_bindgen_macro::*;
 use wasmhaiku_host::{async_fileparts_request, async_request, fileparts::FileParts, RequestMethod};
 
-use std::{collections::HashMap};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -128,7 +128,7 @@ pub fn upload(
 			RequestMethod::POST,
 			headers.clone(),
 			req_body.clone(),
-			FileParts {inner: vec![fp]},
+			FileParts { inner: vec![fp] },
 		);
 	}
 
