@@ -22,5 +22,4 @@ rand = "0.8"
 rand_chacha = "0.3"
 wasmedge-bindgen = "0.1"
 wasmedge-bindgen-macro = "0.1"
-
-wasmhaiku-host = { path = "../../../wasmhaiku-host" }
+wasmhaiku-glue = "0.1.0"

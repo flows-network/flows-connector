@@ -1,7 +1,7 @@
 #[allow(unused_imports)]
 use wasmedge_bindgen::*;
 use wasmedge_bindgen_macro::*;
-use wasmhaiku_host::{async_fileparts_request, async_request, fileparts::FileParts, RequestMethod};
+use wasmhaiku_glue::{async_fileparts_request, async_request, fileparts::FileParts, RequestMethod};
 
 use std::collections::HashMap;
 

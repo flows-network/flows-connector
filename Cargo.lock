@@ -1995,7 +1995,7 @@ dependencies = [
  "url",
  "wasmedge-bindgen 0.1.14",
  "wasmedge-bindgen-macro 0.1.14",
- "wasmhaiku-host",
+ "wasmhaiku-glue",
 ]
 
 [[package]]
@@ -2126,7 +2126,7 @@ dependencies = [
  "url",
  "wasmedge-bindgen 0.4.0",
  "wasmedge-bindgen-macro 0.4.0",
- "wasmhaiku-host",
+ "wasmhaiku-glue",
 ]
 
 [[package]]
@@ -2828,8 +2828,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "wasmhaiku-host"
+name = "wasmhaiku-glue"
 version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "90cbb99ba527a5b2d5cde5b7278f6234b4e5d47ec284b50b9aec4a312e995c18"
 dependencies = [
  "serde_json",
 ]
