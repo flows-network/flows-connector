@@ -7,7 +7,6 @@ use axum::{
 	Router,
 };
 use lazy_static::lazy_static;
-use openssl::rsa::{Padding, Rsa};
 use reqwest::{multipart, Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -15,17 +14,26 @@ use std::env;
 use std::net::SocketAddr;
 use std::time::Duration;
 
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
+
+static RSA_BITS: usize = 2048;
+
 lazy_static! {
 	static ref REACTOR_API_PREFIX: String =
 		env::var("REACTOR_API_PREFIX").expect("Env variable REACTOR_API_PREFIX not set");
 	static ref REACTOR_AUTH_TOKEN: String =
 		env::var("REACTOR_AUTH_TOKEN").expect("Env variable REACTOR_AUTH_TOKEN not set");
-	static ref PASSPHRASE: String =
-		env::var("PASSPHRASE").expect("Env variable PASSPHRASE not set");
-	static ref PUBLIC_KEY_PEM: String =
-		env::var("PUBLIC_KEY_PEM").expect("Env variable PUBLIC_KEY_PEM not set");
-	static ref PRIVATE_KEY_PEM: String =
-		env::var("PRIVATE_KEY_PEM").expect("Env variable PRIVATE_KEY_PEM not set");
+	static ref RSA_RAND_SEED: [u8; 32] = env::var("RSA_RAND_SEED")
+		.expect("Env variable RSA_RAND_SEED not set")
+		.as_bytes()
+		.try_into()
+		.unwrap();
+	static ref CHACHA8RNG: ChaCha8Rng = ChaCha8Rng::from_seed(*RSA_RAND_SEED);
+	static ref PRIV_KEY: RsaPrivateKey =
+		RsaPrivateKey::new(&mut CHACHA8RNG.clone(), RSA_BITS).expect("failed to generate a key");
+	static ref PUB_KEY: RsaPublicKey = RsaPublicKey::from(&*PRIV_KEY);
 }
 
 const TIMEOUT: u64 = 120;
@@ -35,23 +43,28 @@ fn new_http_client() -> Client {
 	return cb.build().unwrap();
 }
 
-fn encrypt(data: String) -> String {
-	let rsa = Rsa::public_key_from_pem(PUBLIC_KEY_PEM.as_bytes()).unwrap();
-	let mut buf: Vec<u8> = vec![0; rsa.size() as usize];
-	rsa.public_encrypt(data.as_bytes(), &mut buf, Padding::PKCS1)
-		.unwrap();
-	hex::encode(buf)
+fn encrypt(data: &str) -> String {
+	hex::encode(
+		PUB_KEY
+			.encrypt(
+				&mut CHACHA8RNG.clone(),
+				PaddingScheme::new_pkcs1v15_encrypt(),
+				data.as_bytes(),
+			)
+			.expect("failed to encrypt"),
+	)
 }
 
-fn decrypt(hex: String) -> String {
-	let rsa =
-		Rsa::private_key_from_pem_passphrase(PRIVATE_KEY_PEM.as_bytes(), PASSPHRASE.as_bytes())
-			.unwrap();
-	let mut buf: Vec<u8> = vec![0; rsa.size() as usize];
-	let l = rsa
-		.private_decrypt(&hex::decode(hex).unwrap(), &mut buf, Padding::PKCS1)
-		.unwrap();
-	String::from_utf8(buf[..l].to_vec()).unwrap()
+fn decrypt(data: &str) -> String {
+	String::from_utf8(
+		PRIV_KEY
+			.decrypt(
+				PaddingScheme::new_pkcs1v15_encrypt(),
+				&hex::decode(data).unwrap(),
+			)
+			.expect("failed to decrypt"),
+	)
+	.unwrap()
 }
 
 #[derive(Deserialize, Serialize)]
@@ -88,7 +101,7 @@ async fn auth(Query(auth_body): Query<AuthBody>) -> impl IntoResponse {
 								REACTOR_API_PREFIX.as_str(),
 								authed_user.id,
 								gu,
-								encrypt(at.access_token.unwrap())
+								encrypt(at.access_token.unwrap().as_str())
 							);
 							Ok((StatusCode::FOUND, [("Location", location)]))
 						}
@@ -264,7 +277,7 @@ async fn get_author_token_from_reactor(user: &str) -> Result<String, ()> {
 	if let Ok(res) = response {
 		if res.status().is_success() {
 			if let Ok(body) = res.text().await {
-				return Ok(decrypt(body));
+				return Ok(decrypt(body.as_str()));
 			}
 		}
 	}
@@ -317,7 +330,7 @@ async fn post_msg(
 				tokio::spawn(
 					new_http_client()
 						.post("https://slack.com/api/chat.postMessage")
-						.bearer_auth(decrypt(msg_body.state.clone()))
+						.bearer_auth(decrypt(msg_body.state.as_str()))
 						.json(&request)
 						.send(),
 				);
@@ -331,7 +344,7 @@ async fn post_msg(
 async fn upload_file_to_slack(form: multipart::Form, access_token: String) {
 	let response = new_http_client()
 		.post("https://slack.com/api/files.upload")
-		.bearer_auth(decrypt(access_token))
+		.bearer_auth(decrypt(access_token.as_str()))
 		.multipart(form)
 		.send()
 		.await;
@@ -493,7 +506,7 @@ async fn view_channel(access_token: &str, channel: &str) -> Option<Channel> {
 }
 
 async fn route_channels(Json(body): Json<RouteReq>) -> impl IntoResponse {
-	let access_token = decrypt(body.state);
+	let access_token = decrypt(body.state.as_str());
 	let cursor = body.cursor.unwrap_or_default();
 	match get_channels(&access_token, cursor).await {
 		Ok(mut chs) => {
@@ -544,7 +557,7 @@ struct JoinChannelReq {
 }
 
 async fn join_channel(Json(req): Json<JoinChannelReq>) -> impl IntoResponse {
-	let access_token = decrypt(req.state);
+	let access_token = decrypt(req.state.as_str());
 
 	return match view_channel(&access_token, &req.value).await {
 		Some(ch) => {

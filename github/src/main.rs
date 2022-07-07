@@ -4,8 +4,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::{Serialize, Deserialize};
 use serde_json::{json, Value};
 use lazy_static::lazy_static;
-use openssl::rsa::{Rsa, Padding};
-use openssl::pkey::{Public, Private};
 use jsonwebtoken::{encode, Algorithm, Header, EncodingKey};
 use reqwest::{Client, ClientBuilder};
 use axum::{
@@ -15,6 +13,10 @@ use axum::{
 	response::{IntoResponse},
 	http::{StatusCode, header},
 };
+
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct AuthBody {
@@ -53,6 +55,8 @@ struct InstalledRepos {
 	repositories: Vec<InstRepo>,
 }
 
+static RSA_BITS: usize = 2048;
+
 const REPOS_PER_PAGE: u32 = 20;
 
 lazy_static! {
@@ -68,13 +72,15 @@ lazy_static! {
 	static ref GITHUB_CLIENT_ID: String = env::var("GITHUB_APP_CLIENT_ID").expect("Env variable GITHUB_APP_CLIENT_ID not set");
 	static ref GITHUB_CLIENT_SECRET: String = env::var("GITHUB_APP_CLIENT_SECRET").expect("Env variable GITHUB_APP_CLIENT_SECRET not set");
 
-	static ref PASSPHRASE: String = env::var("PASSPHRASE").expect("Env variable PASSPHRASE not set");
-	static ref PUBLIC_KEY_PEM: String = env::var("PUBLIC_KEY_PEM").expect("Env variable PUBLIC_KEY_PEM not set");
-	static ref PRIVATE_KEY_PEM: String = env::var("PRIVATE_KEY_PEM").expect("Env variable PRIVATE_KEY_PEM not set");
-
-	
-	static ref RSA_PRIVATE_KEY: Rsa<Private> = Rsa::private_key_from_pem_passphrase(PRIVATE_KEY_PEM.as_bytes(), PASSPHRASE.as_bytes()).unwrap();
-	static ref RSA_PUBLIC_KEY: Rsa<Public> = Rsa::public_key_from_pem(PUBLIC_KEY_PEM.as_bytes()).unwrap();
+	static ref RSA_RAND_SEED: [u8; 32] = env::var("RSA_RAND_SEED")
+		.expect("Env variable RSA_RAND_SEED not set")
+		.as_bytes()
+		.try_into()
+		.unwrap();
+	static ref CHACHA8RNG: ChaCha8Rng = ChaCha8Rng::from_seed(*RSA_RAND_SEED);
+	static ref PRIV_KEY: RsaPrivateKey =
+		RsaPrivateKey::new(&mut CHACHA8RNG.clone(), RSA_BITS).expect("failed to generate a key");
+	static ref PUB_KEY: RsaPublicKey = RsaPublicKey::from(&*PRIV_KEY);
 }
 
 const TIMEOUT: u64 = 120;
@@ -93,15 +99,27 @@ fn get_now() -> u64 {
 }
 
 fn encrypt(data: &str) -> String {
-	let mut buf: Vec<u8> = vec![0; RSA_PUBLIC_KEY.size() as usize];
-	RSA_PUBLIC_KEY.public_encrypt(data.as_bytes(), &mut buf, Padding::PKCS1).unwrap();
-	hex::encode(buf)
+	hex::encode(
+		PUB_KEY
+			.encrypt(
+				&mut CHACHA8RNG.clone(),
+				PaddingScheme::new_pkcs1v15_encrypt(),
+				data.as_bytes(),
+			)
+			.expect("failed to encrypt"),
+	)
 }
 
-fn decrypt(hex: &str) -> String {
-	let mut buf: Vec<u8> = vec![0; RSA_PRIVATE_KEY.size() as usize];
-	let l = RSA_PRIVATE_KEY.private_decrypt(&hex::decode(hex).unwrap(), &mut buf, Padding::PKCS1).unwrap();
-	String::from_utf8(buf[..l].to_vec()).unwrap()
+fn decrypt(data: &str) -> String {
+	String::from_utf8(
+		PRIV_KEY
+			.decrypt(
+				PaddingScheme::new_pkcs1v15_encrypt(),
+				&hex::decode(data).unwrap(),
+			)
+			.expect("failed to decrypt"),
+	)
+	.unwrap()
 }
 
 async fn auth(Query(auth_body): Query<AuthBody>) -> impl IntoResponse {
