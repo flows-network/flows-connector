@@ -8,7 +8,7 @@ use axum::{
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::{env, net::SocketAddr, time::Duration};
+use std::{env, collections::HashMap, net::SocketAddr, time::Duration};
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -110,29 +110,77 @@ struct PostBody {
     state: String,
 }
 
-async fn post_msg(Json(pb): Json<PostBody>) -> impl IntoResponse {
-    match serde_json::from_str::<MailBody>(&pb.text) {
-        Ok(mb) => {
+async fn post_msg(msg_body: web::Json<PostBody>) -> HttpResponse {
+    let pb = msg_body.into_inner();
+
+    if let Ok(mb) = serde_json::from_str::<MailBody>(&pb.text) {
+        let request = serde_json::json!({
+            "personalizations": [
+                {
+                    "to": [
+                        {
+                            "email": mb.to_email
+                        }
+                    ]
+                }
+            ],
+            "from": {
+                "email": pb.user
+            },
+            "subject": mb.subject,
+            "content": [
+                {
+                    "type": "text/html",
+                    "value": mb.content
+                }
+            ]
+        });
+
+        let response = new_http_client()
+            .post("https://api.sendgrid.com/v3/mail/send")
+            .set_header("Authorization", format!("Bearer {}", decrypt(&pb.state)))
+            .send_json(&request)
+            .await;
+        match response {
+            Ok(_) => HttpResponse::Ok().finish(),
+            Err(e) => HttpResponse::InternalServerError().body(format!("{}", e)),
+        }
+    } else if let Ok(mbs) = serde_json::from_str::<Vec<MailBody>>(&pb.text) {
+        if mbs.is_empty() {
+            return HttpResponse::BadRequest().finish();
+        }
+
+        let mut emails: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for mb in mbs {
+            let subject = mb.subject;
+            let to_email = mb.to_email;
+            emails
+                .entry(mb.content)
+                .or_insert(vec![(subject.clone(), to_email.clone())])
+                .push((subject, to_email));
+        }
+
+        let client = new_http_client();
+
+        for (content, ens) in emails {
+            let personalizations: Vec<_> = ens
+                .into_iter()
+                .map(|(subject, to_email)| {
+                    serde_json::json!({
+                        "to": to_email,
+                        "subject": subject,
+                    })
+                })
+                .collect();
             let request = serde_json::json!({
-                "personalizations": [
-                    {
-                        "to": [
-                            {
-                                "email": mb.to_email
-                            }
-                        ]
-                    }
-                ],
                 "from": {
-                    "email": pb.user
+                    "email": pb.user,
                 },
-                "subject": mb.subject,
-                "content": [
-                    {
-                        "type": "text/html",
-                        "value": mb.content
-                    }
-                ]
+                "personalizations": personalizations,
+                "content": [{
+                    "type": "text/html",
+                    "value": content,
+                }]
             });
 
             let response = HTTP_CLIENT
@@ -142,11 +190,14 @@ async fn post_msg(Json(pb): Json<PostBody>) -> impl IntoResponse {
                 .send()
                 .await;
             match response {
-                Ok(_) => (StatusCode::OK, String::from("")),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)),
+                Ok(_) => (),
+                Err(e) => return HttpResponse::InternalServerError().body(format!("{}", e)),
             }
         }
-        Err(_) => (StatusCode::BAD_REQUEST, String::from("")),
+
+        HttpResponse::Ok().finish()
+    } else {
+        HttpResponse::BadRequest().finish()
     }
 }
 
