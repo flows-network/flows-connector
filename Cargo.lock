@@ -870,6 +870,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "gmail-connector"
+version = "0.1.0"
+dependencies = [
+ "actix-web",
+ "awc",
+ "base64 0.13.0",
+ "hex",
+ "lazy_static",
+ "openssl",
+ "serde",
+ "serde_json",
+ "urlencoding",
+]
+
+[[package]]
 name = "h2"
 version = "0.2.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2000,7 +2015,7 @@ dependencies = [
  "url",
  "wasmedge-bindgen 0.1.14",
  "wasmedge-bindgen-macro 0.1.14",
- "wasmhaiku-glue",
+ "wasmhaiku-glue 0.1.0 (registry+https://github.com/rust-lang/crates.io-index)",
 ]
 
 [[package]]
@@ -2133,7 +2148,7 @@ dependencies = [
  "url",
  "wasmedge-bindgen 0.4.0",
  "wasmedge-bindgen-macro 0.4.0",
- "wasmhaiku-glue",
+ "wasmhaiku-glue 0.1.0",
 ]
 
 [[package]]
@@ -2809,8 +2824,6 @@ checksum = "f1bae93d924a4646ccaeda139dec350205c89e9d5e13e9667423c0d641090a27"
 [[package]]
 name = "wasmedge-bindgen"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "70b845f27a9ff92d3f1ad704e7064586cdc270096c02008e2016db0c38868909"
 
 [[package]]
 name = "wasmedge-bindgen-macro"
@@ -2826,12 +2839,17 @@ dependencies = [
 [[package]]
 name = "wasmedge-bindgen-macro"
 version = "0.4.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93d8806db327c05ad3b5ee6f094e70261fa143e0f8a4508d6e49d7dd5de2012f"
 dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "wasmhaiku-glue"
+version = "0.1.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]
