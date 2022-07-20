@@ -290,7 +290,10 @@ async fn capture_event_inner(event: Event) {
                         Value::Object(_) => "issue_comment",
                         _ => "issues",
                     },
-                    _ => "",
+                    _ => match payload["pull_request"] {
+                        Value::Object(_) => "pull_request",
+                        _ => "",
+                    },
                 },
             };
             let triggers = serde_json::json!({
@@ -568,6 +571,10 @@ async fn hook_events() -> impl IntoResponse {
             {
                 "field": "Star",
                 "value": "star"
+            },
+            {
+                "field": "Pull Request",
+                "value": "pull_request"
             }
         ]
     });
