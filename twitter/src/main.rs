@@ -17,6 +17,11 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+const TIMEOUT: u64 = 120;
+
+const STATE_MAP_MAX: usize = 100;
+const STATE_BLOCK_EXPIRE_SEC: u64 = 10 * 60;
+
 lazy_static! {
     static ref REACTOR_API_PREFIX: String =
         env::var("REACTOR_API_PREFIX").expect("Env variable REACTOR_API_PREFIX not set");
@@ -36,19 +41,13 @@ lazy_static! {
         env::var("PRIVATE_KEY_PEM").expect("Env variable PRIVATE_KEY_PEM not set");
     static ref STATE_MAP: Arc<Mutex<HashMap<String, StateBlock>>> =
         Arc::new(Mutex::new(HashMap::new()));
+    static ref HTTP_CLIENT: Client = ClientBuilder::new()
+        .timeout(Duration::from_secs(TIMEOUT))
+        .build()
+        .expect("Can't build the reqwest client");
 }
 
 static CONNECT_HTML: &str = include_str!("./connect.html");
-
-const TIMEOUT: u64 = 120;
-
-const STATE_MAP_MAX: usize = 100;
-const STATE_BLOCK_EXPIRE_SEC: u64 = 10 * 60;
-
-fn new_http_client() -> Client {
-    let cb = ClientBuilder::new().timeout(Duration::from_secs(TIMEOUT));
-    return cb.build().unwrap();
-}
 
 fn encrypt(data: &str) -> String {
     let rsa = Rsa::public_key_from_pem(PUBLIC_KEY_PEM.as_bytes()).unwrap();
@@ -209,7 +208,7 @@ async fn get_access_token(code: &str) -> Result<OAuthBody, String> {
         TWITTER_OAUTH_CLIENT_SECRET.as_str()
     ));
 
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .post("https://api.twitter.com/2/oauth2/token")
         .header("Authorization", format!("Basic {}", basic_auth))
         .form(&params)
@@ -228,7 +227,7 @@ async fn get_access_token(code: &str) -> Result<OAuthBody, String> {
 }
 
 async fn get_authed_user(access_token: &str) -> Result<(String, String), String> {
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .get("https://api.twitter.com/2/users/me")
         .bearer_auth(access_token)
         .send()
@@ -289,7 +288,7 @@ async fn post_msg(Json(msg_body): Json<PostBody>) -> impl IntoResponse {
         if route.is_some() {
             match route.unwrap().as_str() {
                 "create-tweet" => {
-                    _ = new_http_client()
+                    _ = HTTP_CLIENT
                         .post("https://api.twitter.com/2/tweets")
                         .bearer_auth(decrypt(&msg_body.state))
                         .json(&serde_json::json!({
@@ -323,7 +322,7 @@ async fn refresh_token(Json(msg_body): Json<RefreshState>) -> impl IntoResponse 
         TWITTER_OAUTH_CLIENT_SECRET.as_str()
     ));
 
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .post("https://api.twitter.com/2/oauth2/token")
         .header("Authorization", format!("Basic {}", basic_auth))
         .form(&params)

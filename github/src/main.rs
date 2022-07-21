@@ -55,9 +55,11 @@ struct InstalledRepos {
     repositories: Vec<InstRepo>,
 }
 
-static RSA_BITS: usize = 2048;
+const RSA_BITS: usize = 2048;
 
 const REPOS_PER_PAGE: u32 = 20;
+
+const TIMEOUT: u64 = 120;
 
 lazy_static! {
     static ref REACTOR_API_PREFIX: String =
@@ -85,13 +87,10 @@ lazy_static! {
     static ref PRIV_KEY: RsaPrivateKey =
         RsaPrivateKey::new(&mut CHACHA8RNG.clone(), RSA_BITS).expect("failed to generate a key");
     static ref PUB_KEY: RsaPublicKey = RsaPublicKey::from(&*PRIV_KEY);
-}
-
-const TIMEOUT: u64 = 120;
-
-fn new_http_client() -> Client {
-    let cb = ClientBuilder::new().timeout(Duration::from_secs(TIMEOUT));
-    return cb.build().unwrap();
+    static ref HTTP_CLIENT: Client = ClientBuilder::new()
+        .timeout(Duration::from_secs(TIMEOUT))
+        .build()
+        .expect("Can't build the reqwest client");
 }
 
 fn get_now() -> u64 {
@@ -162,7 +161,7 @@ async fn get_access_token(code: &str) -> Result<AccessTokenBody, String> {
         ("code", code),
     ];
 
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .post("https://github.com/login/oauth/access_token")
         .header(header::ACCEPT, "application/json")
         .form(&params)
@@ -198,7 +197,7 @@ async fn get_installation_token(installation_id: u64) -> Result<String, String> 
     )
     .unwrap();
 
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .post(format!(
             "https://api.github.com/app/installations/{installation_id}/access_tokens"
         ))
@@ -230,7 +229,7 @@ async fn get_installed_repositories(
     install_token: &str,
     page: u32,
 ) -> Result<InstalledRepos, String> {
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .get(format!(
             "https://api.github.com/installation/repositories?per_page={}&page={}",
             REPOS_PER_PAGE, page
@@ -320,7 +319,7 @@ async fn post_event_to_reactor(user: &str, flow: &str, text: &str, triggers: Val
         "triggers": triggers,
     });
 
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .post(format!("{}/api/_funcs/_post", REACTOR_API_PREFIX.as_str()))
         .header(header::AUTHORIZATION, REACTOR_AUTH_TOKEN.as_str())
         .json(&request)
@@ -339,7 +338,7 @@ struct GithubUser {
 }
 
 async fn get_authed_user(access_token: &str) -> Result<GithubUser, String> {
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .get("https://api.github.com/user")
         .bearer_auth(access_token)
         .header(
@@ -368,7 +367,7 @@ async fn get_authed_user(access_token: &str) -> Result<GithubUser, String> {
 }
 
 async fn get_github_user(api_url: &str, access_token: &str) -> Result<GithubUser, ()> {
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .get(api_url)
         .bearer_auth(access_token)
         .header(
@@ -389,7 +388,7 @@ async fn get_github_user(api_url: &str, access_token: &str) -> Result<GithubUser
 async fn get_author_token_from_reactor(user: &str) -> Result<String, ()> {
     let request = serde_json::json!({ "author": user });
 
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .post(format!(
             "{}/api/_funcs/_author_state",
             REACTOR_API_PREFIX.as_str()
@@ -477,7 +476,7 @@ async fn create_hook_inner(
             "content_type": "form",
         }
     });
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .post(format!(
             "https://api.github.com/repos/{repo_full_name}/hooks"
         ))
@@ -529,7 +528,7 @@ async fn revoke_hook_inner(
     hook_id: &str,
     install_token: &str,
 ) -> Result<(), String> {
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .delete(format!(
             "https://api.github.com/repos/{repo_full_name}/hooks/{hook_id}"
         ))
@@ -671,7 +670,7 @@ async fn post_msg(
             {
                 match route.0.unwrap().as_str() {
                     "create-issue" => {
-                        _ = new_http_client()
+                        _ = HTTP_CLIENT
                             .post(format!("https://api.github.com/repos/{}/issues", repo_name))
                             .header(header::ACCEPT, "application/vnd.github.v3+json")
                             .header(
@@ -700,7 +699,7 @@ async fn get_repo_namewithowner(node_id: &str, access_token: &str) -> Result<Str
         r#"{{"query":"query {{\n  node(id:\"{}\") {{\n   ... on Repository {{\n       nameWithOwner\n    }}\n  }}\n}}"}}"#,
         node_id
     );
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .post("https://api.github.com/graphql")
         .header(header::ACCEPT, "application/vnd.github.v3+json")
         .header(

@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
-    Router,
+    Router, Server,
 };
 use lazy_static::lazy_static;
 use reqwest::{multipart, Client, ClientBuilder};
@@ -18,7 +18,9 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 
-static RSA_BITS: usize = 2048;
+const RSA_BITS: usize = 2048;
+
+const TIMEOUT: u64 = 120;
 
 lazy_static! {
     static ref REACTOR_API_PREFIX: String =
@@ -34,13 +36,10 @@ lazy_static! {
     static ref PRIV_KEY: RsaPrivateKey =
         RsaPrivateKey::new(&mut CHACHA8RNG.clone(), RSA_BITS).expect("failed to generate a key");
     static ref PUB_KEY: RsaPublicKey = RsaPublicKey::from(&*PRIV_KEY);
-}
-
-const TIMEOUT: u64 = 120;
-
-fn new_http_client() -> Client {
-    let cb = ClientBuilder::new().timeout(Duration::from_secs(TIMEOUT));
-    return cb.build().unwrap();
+    static ref HTTP_CLIENT: Client = ClientBuilder::new()
+        .timeout(Duration::from_secs(TIMEOUT))
+        .build()
+        .expect("Can't build the reqwest client");
 }
 
 fn encrypt(data: &str) -> String {
@@ -128,7 +127,7 @@ async fn get_access_token(code: &str) -> Result<OAuthAccessBody, String> {
         ("code", &code),
     ];
 
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .post("https://slack.com/api/oauth.v2.access")
         .form(&params)
         .send()
@@ -146,7 +145,7 @@ async fn get_access_token(code: &str) -> Result<OAuthAccessBody, String> {
 }
 
 async fn get_authed_user(access_token: &str) -> Result<String, String> {
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .get("https://slack.com/api/users.profile.get")
         .bearer_auth(access_token)
         .send()
@@ -226,7 +225,7 @@ async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, cha
             }
         });
 
-        let _ = new_http_client()
+        let _ = HTTP_CLIENT
             .post(format!("{}/api/_funcs/_post", REACTOR_API_PREFIX.as_str()))
             .header("Authorization", REACTOR_AUTH_TOKEN.as_str())
             .json(&request)
@@ -249,7 +248,7 @@ async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, cha
             }
         }
 
-        let _ = new_http_client()
+        let _ = HTTP_CLIENT
             .post(format!(
                 "{}/api/_funcs/_upload",
                 REACTOR_API_PREFIX.as_str()
@@ -264,7 +263,7 @@ async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, cha
 async fn get_author_token_from_reactor(user: &str) -> Result<String, ()> {
     let request = serde_json::json!({ "author": user });
 
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .post(format!(
             "{}/api/_funcs/_author_state",
             REACTOR_API_PREFIX.as_str()
@@ -285,7 +284,7 @@ async fn get_author_token_from_reactor(user: &str) -> Result<String, ()> {
 }
 
 async fn get_file(access_token: &str, url_private: &str) -> Result<Vec<u8>, ()> {
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .get(url_private)
         .bearer_auth(access_token)
         .send()
@@ -328,7 +327,7 @@ async fn post_msg(
                 });
 
                 tokio::spawn(
-                    new_http_client()
+                    HTTP_CLIENT
                         .post("https://slack.com/api/chat.postMessage")
                         .bearer_auth(decrypt(msg_body.state.as_str()))
                         .json(&request)
@@ -342,7 +341,7 @@ async fn post_msg(
 }
 
 async fn upload_file_to_slack(form: multipart::Form, access_token: String) {
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .post("https://slack.com/api/files.upload")
         .bearer_auth(decrypt(access_token.as_str()))
         .multipart(form)
@@ -471,7 +470,7 @@ struct RouteReq {
 }
 
 async fn get_channels(access_token: &str, cursor: String) -> Result<Channels, String> {
-    let response = new_http_client()
+    let response = HTTP_CLIENT
 		.get(format!("https://slack.com/api/conversations.list?limit={}&cursor={}&types=public_channel,private_channel,im", CHANNELS_PER_PAGE, cursor))
 		.bearer_auth(access_token)
 		.send()
@@ -487,7 +486,7 @@ async fn get_channels(access_token: &str, cursor: String) -> Result<Channels, St
 }
 
 async fn view_channel(access_token: &str, channel: &str) -> Option<Channel> {
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .get(format!(
             "https://slack.com/api/conversations.info?channel={}",
             channel
@@ -579,7 +578,7 @@ async fn join_channel(Json(req): Json<JoinChannelReq>) -> impl IntoResponse {
 
 async fn join_channel_inner(channel: &str, access_token: &str) -> Result<(), String> {
     let param = serde_json::json!({ "channel": channel });
-    let response = new_http_client()
+    let response = HTTP_CLIENT
         .post(format!("https://slack.com/api/conversations.join"))
         .bearer_auth(access_token)
         .json(&param)
@@ -613,7 +612,7 @@ async fn main() {
     let port = port.parse::<u16>().unwrap();
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
-    axum::Server::bind(&addr)
+    Server::bind(&addr)
         .serve(app.into_make_service())
         .await
         .unwrap();
