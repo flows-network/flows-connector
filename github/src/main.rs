@@ -409,45 +409,27 @@ async fn get_author_token_from_reactor(user: &str) -> Result<String, ()> {
 }
 
 #[derive(Debug, Deserialize)]
-struct FieldValue {
-    // field: String,
-    value: String,
-}
-#[derive(Debug, Deserialize)]
-struct HookEvents {
-    events: Vec<FieldValue>,
+struct HookRoutes {
+    event: String,
+    repo: String,
 }
 #[derive(Debug, Deserialize)]
 struct HookReq {
     user: String,
     state: String,
-    field: String,
-    // value: String,
-    flow: Option<String>,
-    custom: Option<HookEvents>,
+    flow: String,
+    routes: HookRoutes,
 }
 
 async fn create_hook(Json(req): Json<HookReq>) -> impl IntoResponse {
-    if req.custom.is_none() || req.flow.is_none() {
-        return Err((StatusCode::BAD_REQUEST, "Not enough parameter".to_string()));
-    }
-
     let auth_state = serde_json::from_str::<AuthState>(&decrypt(&req.state)).unwrap();
 
     match get_installation_token(auth_state.installation_id).await {
         Ok(install_token) => {
-            let events: Vec<String> = req
-                .custom
-                .unwrap()
-                .events
-                .iter()
-                .map(|e| e.value.clone())
-                .collect();
             match create_hook_inner(
                 &req.user,
-                &req.flow.unwrap(),
-                &req.field,
-                events,
+                &req.flow,
+                &req.routes,
                 &install_token,
             )
             .await
@@ -463,14 +445,13 @@ async fn create_hook(Json(req): Json<HookReq>) -> impl IntoResponse {
 async fn create_hook_inner(
     connector: &str,
     flow_id: &str,
-    repo_full_name: &str,
-    events: Vec<String>,
+    routes: &HookRoutes,
     install_token: &str,
 ) -> Result<Value, String> {
     let param = json!({
         "name": "web",
         "active": true,
-        "events": events,
+        "events": routes.event,
         "config": {
             "url": format!("{}/event?connector={connector}&flow={flow_id}", SERVICE_API_PREFIX.as_str()),
             "content_type": "form",
@@ -478,7 +459,7 @@ async fn create_hook_inner(
     });
     let response = HTTP_CLIENT
         .post(format!(
-            "https://api.github.com/repos/{repo_full_name}/hooks"
+            "https://api.github.com/repos/{}/hooks", routes.repo
         ))
         .header("Accept", "application/vnd.github.v3+json")
         .header("User-Agent", "Github Connector of Second State Reactor")
@@ -514,7 +495,7 @@ async fn revoke_hook(
 
     match get_installation_token(auth_state.installation_id).await {
         Ok(install_token) => {
-            match revoke_hook_inner(&req.field, &query.hook_id, &install_token).await {
+            match revoke_hook_inner(&req.routes, &query.hook_id, &install_token).await {
                 Ok(()) => Ok(StatusCode::OK),
                 Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
             }
@@ -524,13 +505,13 @@ async fn revoke_hook(
 }
 
 async fn revoke_hook_inner(
-    repo_full_name: &str,
+    routes: &HookRoutes,
     hook_id: &str,
     install_token: &str,
 ) -> Result<(), String> {
     let response = HTTP_CLIENT
         .delete(format!(
-            "https://api.github.com/repos/{repo_full_name}/hooks/{hook_id}"
+            "https://api.github.com/repos/{}/hooks/{hook_id}", routes.repo
         ))
         .header(header::ACCEPT, "application/vnd.github.v3+json")
         .header(
