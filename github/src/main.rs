@@ -16,6 +16,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
+use rand::{distributions::Alphanumeric, Rng};
 use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -453,12 +454,17 @@ async fn create_hook_inner(
     routes: &HookRoutes,
     install_token: &str,
 ) -> Result<Value, String> {
+    let rand_str: String = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(10)
+        .map(char::from)
+        .collect();
     let param = json!({
         "name": "web",
         "active": true,
         "events": [routes.event.value],
         "config": {
-            "url": format!("{}/event?connector={connector}&flow={flow_id}", SERVICE_API_PREFIX.as_str()),
+            "url": format!("{}/event?connector={connector}&flow={flow_id}&rand={rand_str}", SERVICE_API_PREFIX.as_str()),
             "content_type": "form",
         }
     });
