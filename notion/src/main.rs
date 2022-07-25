@@ -2,7 +2,7 @@ use axum::{extract::Query, http::StatusCode, response::IntoResponse, routing::{g
 use lazy_static::lazy_static;
 use openssl::rsa::{Padding, Rsa};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::{env, net::SocketAddr};
 use reqwest::{Client, header};
 
@@ -64,8 +64,8 @@ async fn auth(auth_body: Query<AuthBody>) -> impl IntoResponse {
             let location = format!(
                 "{}/api/connected?authorId={}&authorName={}&authorState={}",
                 REACTOR_API_PREFIX.as_str(),
-                workspace_name,
                 workspace_id,
+                workspace_name,
                 encrypt(at.access_token),
             );
             Ok((StatusCode::FOUND, [("Location", location)]))
@@ -108,13 +108,74 @@ async fn get_access_token(code: &str) -> Result<AccessTokenBody, String> {
     }
 }
 
+#[derive(Deserialize)]
+struct ReactorReqBody {
+    user: String,               // Workspace ID
+    state: String,              // AccessToken
+    text: serde_json::Value,    // Customize
+}
+
+// ref https://developers.notion.com/reference/post-search
+// ret https://developers.notion.com/reference/post-search -> results
+// text: {
+//     page_size: number,     // max 100
+//     next_cursor: string
+// }
+async fn list_databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
+    let mut body = json!({
+        "filter": {
+            "value": "2022-06-28",
+            "property": "object",
+        },
+    });
+
+    if let Value::Object(text) = &req.text {
+        if let Value::Number(page_size) = &text["page_size"] {
+            body.as_object_mut().unwrap()
+                .insert("page_size".to_string(), Value::Number(page_size.clone()));
+        }
+
+        if let Value::String(next_cursor) = &text["next_cursor"] {
+            body.as_object_mut().unwrap()
+                .insert("next_cursor".to_string(), Value::String(next_cursor.clone()));
+        }
+     }
+
+    let response = HTTP_CLIENT
+        .post("https://api.notion.com/v1/search")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::USER_AGENT, "Github Connector of Second State Reactor")
+        .header("Authorization", format!("Bearer {}", decrypt(req.state.clone())))
+        .header("Notion-Version", "2022-06-28")
+        .json(&body)
+        .send()
+        .await;
+
+    match response {
+        Ok(resp) => {
+            match resp.json::<Value>().await {
+                Ok(body) => {
+                    if let Value::Array(_) = body["results"] {
+                        Ok((StatusCode::FOUND, Json(body["results"].clone())))
+                    } else {
+                        Err((StatusCode::INTERNAL_SERVER_ERROR, "Parse results failed.".to_string()))
+                    }
+                },
+                Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())) ,
+            }
+        },
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string())
         .parse::<u16>()?;
 
     let app = Router::new()
-        .route("/auth", get(auth));
+        .route("/auth", get(auth))
+        .route("/list-databases", post(list_databases));
 
     axum::Server::bind(&SocketAddr::from(([127, 0, 0, 1], port)))
         .serve(app.into_make_service())
