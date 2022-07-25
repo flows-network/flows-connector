@@ -8,7 +8,7 @@ use axum::{
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use std::{env, collections::HashMap, net::SocketAddr, time::Duration};
+use std::{collections::HashMap, env, net::SocketAddr, time::Duration};
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -110,9 +110,7 @@ struct PostBody {
     state: String,
 }
 
-async fn post_msg(msg_body: web::Json<PostBody>) -> HttpResponse {
-    let pb = msg_body.into_inner();
-
+async fn post_msg(Json(pb): Json<PostBody>) -> impl IntoResponse {
     if let Ok(mb) = serde_json::from_str::<MailBody>(&pb.text) {
         let request = serde_json::json!({
             "personalizations": [
@@ -136,18 +134,19 @@ async fn post_msg(msg_body: web::Json<PostBody>) -> HttpResponse {
             ]
         });
 
-        let response = new_http_client()
+        let response = HTTP_CLIENT
             .post("https://api.sendgrid.com/v3/mail/send")
-            .set_header("Authorization", format!("Bearer {}", decrypt(&pb.state)))
-            .send_json(&request)
+            .bearer_auth(decrypt(&pb.state))
+            .json(&request)
+            .send()
             .await;
         match response {
-            Ok(_) => HttpResponse::Ok().finish(),
-            Err(e) => HttpResponse::InternalServerError().body(format!("{}", e)),
+            Ok(_) => (StatusCode::OK, String::from("")),
+            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)),
         }
     } else if let Ok(mbs) = serde_json::from_str::<Vec<MailBody>>(&pb.text) {
         if mbs.is_empty() {
-            return HttpResponse::BadRequest().finish();
+            return (StatusCode::BAD_REQUEST, String::from(""));
         }
 
         let mut emails: HashMap<String, Vec<(String, String)>> = HashMap::new();
@@ -159,8 +158,6 @@ async fn post_msg(msg_body: web::Json<PostBody>) -> HttpResponse {
                 .or_insert(vec![(subject.clone(), to_email.clone())])
                 .push((subject, to_email));
         }
-
-        let client = new_http_client();
 
         for (content, ens) in emails {
             let personalizations: Vec<_> = ens
@@ -191,13 +188,13 @@ async fn post_msg(msg_body: web::Json<PostBody>) -> HttpResponse {
                 .await;
             match response {
                 Ok(_) => (),
-                Err(e) => return HttpResponse::InternalServerError().body(format!("{}", e)),
+                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)),
             }
         }
 
-        HttpResponse::Ok().finish()
+        (StatusCode::OK, String::from(""))
     } else {
-        HttpResponse::BadRequest().finish()
+        (StatusCode::BAD_REQUEST, String::from(""))
     }
 }
 
