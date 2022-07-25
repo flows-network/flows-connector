@@ -13,7 +13,8 @@ openssl = "0.10.0"
 hex = "0.4.0"
 jsonwebtoken = "8.1.0"
 reqwest = { version = "0.11", features = ["json", "multipart"] }
-axum = { version="0.5", features = ["multipart"] }
+axum = { version="0.5", features = ["multipart", "headers"] }
+headers = "0.3.7"
 tokio = { version = "1", features = ["full"] }
 rsa = "0.6.0"
 rand = "0.8"
