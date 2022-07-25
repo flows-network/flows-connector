@@ -291,7 +291,13 @@ async fn capture_event_inner(event: Event) {
                     },
                     _ => match payload["pull_request"] {
                         Value::Object(_) => "pull_request",
-                        _ => "",
+                        _ => match payload["discussion"] {
+                            Value::Object(_) => match payload["comment"] {
+                                Value::Object(_) => "discussion_comment",
+                                _ => "discussion",
+                            },
+                            _ => "",
+                        },
                     },
                 },
             };
@@ -574,6 +580,14 @@ async fn hook_events() -> impl IntoResponse {
             {
                 "field": "Pull Request",
                 "value": "pull_request"
+            },
+            {
+                "field": "Discussion",
+                "value": "discussion"
+            },
+            {
+                "field": "Discussion Comment",
+                "value": "discussion_comment"
             }
         ]
     });
