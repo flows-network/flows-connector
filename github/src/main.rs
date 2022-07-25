@@ -409,9 +409,14 @@ async fn get_author_token_from_reactor(user: &str) -> Result<String, ()> {
 }
 
 #[derive(Debug, Deserialize)]
+struct HookRouteObject {
+    field: String,
+    value: String,
+}
+#[derive(Debug, Deserialize)]
 struct HookRoutes {
-    event: String,
-    repo: String,
+    event: HookRouteObject,
+    repo: HookRouteObject,
 }
 #[derive(Debug, Deserialize)]
 struct HookReq {
@@ -451,7 +456,7 @@ async fn create_hook_inner(
     let param = json!({
         "name": "web",
         "active": true,
-        "events": routes.event,
+        "events": [routes.event.value],
         "config": {
             "url": format!("{}/event?connector={connector}&flow={flow_id}", SERVICE_API_PREFIX.as_str()),
             "content_type": "form",
@@ -459,7 +464,7 @@ async fn create_hook_inner(
     });
     let response = HTTP_CLIENT
         .post(format!(
-            "https://api.github.com/repos/{}/hooks", routes.repo
+            "https://api.github.com/repos/{}/hooks", routes.repo.field
         ))
         .header("Accept", "application/vnd.github.v3+json")
         .header("User-Agent", "Github Connector of Second State Reactor")
@@ -476,6 +481,10 @@ async fn create_hook_inner(
                     "revoke": format!("{}/revoke-hook?hook_id={hook_id}", SERVICE_API_PREFIX.as_str()),
                 });
                 return Ok(result);
+            }
+        } else {
+            if let Ok(b) = r.text().await {
+                println!("{}", b);
             }
         }
     }
@@ -511,7 +520,7 @@ async fn revoke_hook_inner(
 ) -> Result<(), String> {
     let response = HTTP_CLIENT
         .delete(format!(
-            "https://api.github.com/repos/{}/hooks/{hook_id}", routes.repo
+            "https://api.github.com/repos/{}/hooks/{hook_id}", routes.repo.field
         ))
         .header(header::ACCEPT, "application/vnd.github.v3+json")
         .header(

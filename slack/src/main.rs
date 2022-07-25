@@ -547,25 +547,34 @@ async fn route_channels(Json(body): Json<RouteReq>) -> impl IntoResponse {
         Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
     }
 }
+#[derive(Debug, Deserialize)]
+struct HookRouteObject {
+    // field: String,
+    value: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct HookRoutes {
+    channels: HookRouteObject,
+}
 
 #[derive(Debug, Deserialize)]
 struct JoinChannelReq {
     // user: String,
     state: String,
-    // field: String,
-    value: String,
+    routes: HookRoutes,
 }
 
 async fn join_channel(Json(req): Json<JoinChannelReq>) -> impl IntoResponse {
     let access_token = decrypt(req.state.as_str());
 
-    return match view_channel(&access_token, &req.value).await {
+    return match view_channel(&access_token, &req.routes.channels.value).await {
         Some(ch) => {
             if ch.is_channel.is_some()
                 && ch.is_channel.unwrap()
                 && (ch.is_member.is_some() && !ch.is_member.unwrap())
             {
-                match join_channel_inner(&req.value, &access_token).await {
+                match join_channel_inner(&req.routes.channels.value, &access_token).await {
                     Ok(v) => Ok((StatusCode::CREATED, Json(v))),
                     Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
                 }
