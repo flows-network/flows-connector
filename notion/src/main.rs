@@ -1,7 +1,7 @@
-use axum::{extract::Query, http::StatusCode, response::IntoResponse, routing::{get, post, delete}, Router, Json};
+use axum::{extract::Query, http::StatusCode, response::IntoResponse, routing::{get, post}, Router, Json};
 use lazy_static::lazy_static;
 use openssl::rsa::{Padding, Rsa};
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{env, net::SocketAddr};
 use reqwest::{Client, header};
@@ -110,13 +110,13 @@ async fn get_access_token(code: &str) -> Result<AccessTokenBody, String> {
 
 #[derive(Deserialize)]
 struct ReactorReqBody {
-    user: String,               // Workspace ID
-    state: String,              // AccessToken
-    text: serde_json::Value,    // Customize
+    // user: String,   // Workspace ID
+    state: String,  // Access Token
+    text: Value,    // Customize
 }
 
 // ref https://developers.notion.com/reference/post-search
-// ret https://developers.notion.com/reference/post-search -> results
+// ret https://api.notion.com/v1/search -> results
 // text: {
 //     page_size: number,     // max 100
 //     next_cursor: string
@@ -139,7 +139,7 @@ async fn list_databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
             body.as_object_mut().unwrap()
                 .insert("next_cursor".to_string(), Value::String(next_cursor.clone()));
         }
-     }
+    }
 
     let response = HTTP_CLIENT
         .post("https://api.notion.com/v1/search")
@@ -155,8 +155,9 @@ async fn list_databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
         Ok(resp) => {
             match resp.json::<Value>().await {
                 Ok(body) => {
-                    if let Value::Array(_) = body["results"] {
-                        Ok((StatusCode::FOUND, Json(body["results"].clone())))
+                    let results = body["results"].clone();
+                    if let Value::Array(_) = results {
+                        Ok((StatusCode::FOUND, Json(results)))
                     } else {
                         Err((StatusCode::INTERNAL_SERVER_ERROR, "Parse results failed.".to_string()))
                     }
@@ -168,6 +169,82 @@ async fn list_databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
     }
 }
 
+// ref https://developers.notion.com/docs/working-with-databases
+//     https://developers.notion.com/reference/post-page
+
+#[derive(Deserialize)]
+struct PostItemArgs {       // text
+    database_id: String,
+    properties: Value,      // ref https://developers.notion.com/docs/working-with-databases#properties
+}
+
+async fn post_database_item(req: Json<ReactorReqBody>) -> impl IntoResponse {
+    let args = match PostItemArgs::deserialize(req.text.clone()) {
+        Ok(args) => args,
+        Err(_) => return Err((StatusCode::BAD_REQUEST, "Invalid JSON data.".to_string())),
+    };
+
+    // ref https://developers.notion.com/docs/working-with-databases#adding-pages-to-a-database
+    let body = json!({
+        "parent": {
+            "type": "database_id", 
+            "database_id": args.database_id,
+        },
+        "properties": args.properties,
+    });
+
+    let response = HTTP_CLIENT
+        .post("https://api.notion.com/v1/pages")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::USER_AGENT, "Github Connector of Second State Reactor")
+        .header("Authorization", format!("Bearer {}", decrypt(req.state.clone())))
+        .header("Notion-Version", "2022-06-28")
+        .json(&body)
+        .send()
+        .await;
+
+    match response {
+        Ok(_) => Ok((StatusCode::FOUND, "Ok.".to_string())),
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Post database item failed: {}.", e.to_string()))),
+    }
+}
+
+// ref https://developers.notion.com/reference/retrieve-a-database
+// ret https://developers.notion.com/reference/database
+#[derive(Deserialize)]
+struct GetArgs {        // text
+    database_id: String,
+}
+
+async fn get_database(req: Json<ReactorReqBody>) -> impl IntoResponse {
+    let args = match GetArgs::deserialize(req.text.clone()) {
+        Ok(args) => args,
+        Err(_) => return Err((StatusCode::BAD_REQUEST, "Invalid JSON data.".to_string())),
+    };
+
+    let response = HTTP_CLIENT
+        .get(format!("https://api.notion.com/v1/databases/{}", args.database_id))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::USER_AGENT, "Github Connector of Second State Reactor")
+        .header("Authorization", format!("Bearer {}", decrypt(req.state.clone())))
+        .header("Notion-Version", "2022-06-28")
+        .send()
+        .await;
+
+    match response {
+        Ok(resp) => {
+            match resp.json::<Value>().await {
+                Ok(database_obj) => Ok((StatusCode::FOUND, Json(database_obj))),
+                Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("Parse database object failed: {}", e.to_string()))),
+            }
+        },
+        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Get database failed: {}", e.to_string()))),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string())
@@ -175,7 +252,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/auth", get(auth))
-        .route("/list-databases", post(list_databases));
+        .route("/list-databases", post(list_databases))
+        .route("/post-database-item", post(post_database_item))
+        .route("/get-database", get(get_database));
 
     axum::Server::bind(&SocketAddr::from(([127, 0, 0, 1], port)))
         .serve(app.into_make_service())
