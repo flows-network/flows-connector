@@ -573,36 +573,84 @@ struct RouteReq {
     cursor: Option<String>,
 }
 
+macro_rules! events {
+    ($($key:expr => $value:expr,)+) => {
+        events!($($key => $value),+)
+    };
+    ($($key:expr => $value:expr),*) => {
+        {
+            let events = serde_json::json!({
+                "list": [
+                    $(
+                        {
+                            "field": $key,
+                            "value": $value,
+                        },
+                    )*
+                ]
+            });
+            Json(events)
+        }
+    }
+}
+
 async fn hook_events() -> impl IntoResponse {
-    let events = serde_json::json!({
-        "list": [
-            {
-                "field": "Issues",
-                "value": "issues"
-            },
-            {
-                "field": "Issue Comment",
-                "value": "issue_comment"
-            },
-            {
-                "field": "Star",
-                "value": "star"
-            },
-            {
-                "field": "Pull Request",
-                "value": "pull_request"
-            },
-            {
-                "field": "Discussion",
-                "value": "discussion"
-            },
-            {
-                "field": "Discussion Comment",
-                "value": "discussion_comment"
-            }
-        ]
-    });
-    Json(events)
+    events! {
+        "Branch Protection Rule" => "branch_protection_rule",
+        "Check Run" => "check_run",
+        "Check Suite" => "check_suite",
+        "Code Scanning Alert" => "code_scanning_alert",
+        "Commit Comment" => "commit_comment",
+        "Create" => "create",
+        "Delete" => "delete",
+        "Deploy Key" => "deploy_key",
+        "Deployment" => "deployment",
+        "Discussion" => "discussion",
+        "Discussion Comment" => "discussion_comment",
+        "Fork" => "fork",
+        "Github App Authorization" => "github_app_authorization",
+        "Gollum" => "gollum",
+        "Installation" => "installation",
+        "Installation Repositories" => "installation_repositories",
+        "Issue Comment" => "issue_comment",
+        "Issues" => "issues",
+        "Label" => "label",
+        "Marketplace Purchase" => "marketplace_purchase",
+        "Member" => "member",
+        "Membership" => "membership",
+        "Meta" => "meta",
+        "Milestone" => "milestone",
+        "Organization" => "organization",
+        "Org Block" => "org_block",
+        "Package" => "package",
+        "Page Build" => "page_build",
+        "Ping" => "ping",
+        "Project" => "project",
+        "Project Card" => "project_card",
+        "Project Column" => "project_column",
+        "Projects V2 Item" => "project_v2_item",
+        "Public" => "public",
+        "Pull Request" => "pull_request",
+        "Pull Request Review" => "pull_request_review",
+        "Pull Request Review Comment" => "pull_request_review_comment",
+        "Pull Request Review Thread" => "pull_request_review_thread",
+        "Push" => "push",
+        "Release" => "release",
+        "Repository Dispatch" => "repository_dispatch",
+        "Repository" => "repository",
+        "Repository Import" => "repository_import",
+        "Repository Vulnerability Alert" => "repository_vulnerability_alert",
+        "Security Advisory" => "security_advisory",
+        "Sponsorship" => "sponsorship",
+        "Star" => "star",
+        "Status" => "status",
+        "Team" => "team",
+        "Team Add" => "team_add",
+        "Watch" => "watch",
+        "Workflow Dispatch" => "workflow_dispatch",
+        "Workflow Job" => "workflow_job",
+        "Workflow Run" => "workflow_run",
+    }
 }
 
 async fn repos(Json(body): Json<RouteReq>) -> impl IntoResponse {
