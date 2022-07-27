@@ -222,7 +222,8 @@ async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, cha
             "user": user,
             "text": text,
             "triggers": {
-                "channels": channel
+                "channels": channel,
+                "event": "get message"
             }
         });
 
@@ -236,7 +237,7 @@ async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, cha
         let mut request = multipart::Form::new()
             .text("user", user)
             .text("text", text)
-            .text("triggers", format!(r#"{{"channels": "{}"}}"#, channel));
+            .text("triggers", format!(r#"{{"channels": "{}", "event": "get message"}}"#, channel));
 
         for f in files.into_iter() {
             if let Ok(b) = get_file(&access_token, &f.url_private).await {
