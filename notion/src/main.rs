@@ -1,10 +1,15 @@
 use axum::{extract::Query, http::StatusCode, response::IntoResponse, routing::{get, post}, Router, Json};
+use axum_server::tls_rustls::RustlsConfig;
 use lazy_static::lazy_static;
-use openssl::rsa::{Padding, Rsa};
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+use rsa::{RsaPrivateKey, RsaPublicKey, PaddingScheme, PublicKey};
 use serde::Deserialize;
 use serde_json::{json, Value};
 use std::{env, net::SocketAddr};
 use reqwest::{Client, header};
+
+const RSA_BITS: usize = 2048;
 
 lazy_static! {
     static ref REACTOR_API_PREFIX: String =
@@ -13,35 +18,47 @@ lazy_static! {
         env::var("NOTION_APP_REDIRECT_URL").expect("Env variable NOTION_APP_REDIRECT_URL not set");
     static ref NOTION_APP_CLIENT_ID: String =
         env::var("NOTION_APP_CLIENT_ID").expect("Env variable NOTION_APP_CLIENT_ID not set");
-    static ref NOTION_APP_CLIENT_SECRET: String = base64::encode(env::var("NOTION_APP_CLIENT_SECRET")
-        .expect("Env variable NOTION_APP_CLIENT_SECRET not set"));
-    static ref PASSPHRASE: String =
-        env::var("PASSPHRASE").expect("Env variable PASSPHRASE not set");
-    static ref PUBLIC_KEY_PEM: String =
-        env::var("PUBLIC_KEY_PEM").expect("Env variable PUBLIC_KEY_PEM not set");
-    static ref PRIVATE_KEY_PEM: String =
-        env::var("PRIVATE_KEY_PEM").expect("Env variable PRIVATE_KEY_PEM not set");
+    static ref NOTION_APP_CLIENT_SECRET: String = env::var("NOTION_APP_CLIENT_SECRET")
+        .expect("Env variable NOTION_APP_CLIENT_SECRET not set");
+
+    static ref CREDENTIAL: String = 
+        base64::encode(format!("{}:{}", *NOTION_APP_CLIENT_ID, *NOTION_APP_CLIENT_SECRET));
+
+    static ref RSA_RAND_SEED: [u8; 32] = env::var("RSA_RAND_SEED")
+        .expect("Env variable RSA_RAND_SEED not set")
+        .as_bytes()
+        .try_into()
+        .unwrap();
+    static ref CHACHA8RNG: ChaCha8Rng = ChaCha8Rng::from_seed(*RSA_RAND_SEED);
+    static ref PRIVATE_KEY: RsaPrivateKey =
+        RsaPrivateKey::new(&mut CHACHA8RNG.clone(), RSA_BITS).expect("failed to generate a key");
+    static ref PUBLIC_KEY: RsaPublicKey = RsaPublicKey::from(&*PRIVATE_KEY);
 
     static ref HTTP_CLIENT: Client = Client::new();
 }
 
-fn encrypt(data: String) -> String {
-    let rsa = Rsa::public_key_from_pem(PUBLIC_KEY_PEM.as_bytes()).unwrap();
-    let mut buf: Vec<u8> = vec![0; rsa.size() as usize];
-    rsa.public_encrypt(data.as_bytes(), &mut buf, Padding::PKCS1)
-        .unwrap();
-    hex::encode(buf)
+fn encrypt(data: &str) -> String {
+    hex::encode(
+        PUBLIC_KEY
+            .encrypt(
+                &mut CHACHA8RNG.clone(),
+                PaddingScheme::new_pkcs1v15_encrypt(),
+                data.as_bytes(),
+            )
+            .expect("failed to encrypt"),
+    )
 }
 
-fn decrypt(hex: String) -> String {
-    let rsa =
-        Rsa::private_key_from_pem_passphrase(PRIVATE_KEY_PEM.as_bytes(), PASSPHRASE.as_bytes())
-            .unwrap();
-    let mut buf: Vec<u8> = vec![0; rsa.size() as usize];
-    let l = rsa
-        .private_decrypt(&hex::decode(hex).unwrap(), &mut buf, Padding::PKCS1)
-        .unwrap();
-    String::from_utf8(buf[..l].to_vec()).unwrap()
+fn decrypt(data: &str) -> String {
+    String::from_utf8(
+        PRIVATE_KEY
+            .decrypt(
+                PaddingScheme::new_pkcs1v15_encrypt(),
+                &hex::decode(data).unwrap(),
+            )
+            .expect("failed to decrypt"),
+    )
+    .unwrap()
 }
 
 #[derive(Deserialize)]
@@ -57,16 +74,13 @@ async fn auth(auth_body: Query<AuthBody>) -> impl IntoResponse {
 
     match get_access_token(&auth_body.code).await {
         Ok(at) => {
-            let workspace_id = base64::encode(at.workspace_id);
-            let workspace_name = base64::encode(
-                at.workspace_name.unwrap_or_else(|| "Unknowen workspace name".to_string()));
-
             let location = format!(
                 "{}/api/connected?authorId={}&authorName={}&authorState={}",
                 REACTOR_API_PREFIX.as_str(),
-                workspace_id,
-                workspace_name,
-                encrypt(at.access_token),
+                at.workspace_id,
+                urlencoding::encode(&at.workspace_name
+                    .unwrap_or_else(|| "Unknown workspace name".to_string()).replace("'", "\\'")),
+                encrypt(&at.access_token),
             );
             Ok((StatusCode::FOUND, [("Location", location)]))
         }
@@ -91,8 +105,8 @@ async fn get_access_token(code: &str) -> Result<AccessTokenBody, String> {
     let response = HTTP_CLIENT
         .post("https://api.notion.com/v1/oauth/token")
         .header(header::USER_AGENT, "Github Connector of Second State Reactor")
-        .header("Authorization", format!(
-            "Basic {}", NOTION_APP_CLIENT_SECRET.as_str()))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header("Authorization", format!("Basic {}", *CREDENTIAL))
         .json(&body)
         .send()
         .await;
@@ -145,7 +159,7 @@ async fn list_databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
         .post("https://api.notion.com/v1/search")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::USER_AGENT, "Github Connector of Second State Reactor")
-        .header("Authorization", format!("Bearer {}", decrypt(req.state.clone())))
+        .header("Authorization", format!("Bearer {}", decrypt(&req.state)))
         .header("Notion-Version", "2022-06-28")
         .json(&body)
         .send()
@@ -156,7 +170,10 @@ async fn list_databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
             match resp.json::<Value>().await {
                 Ok(body) => {
                     let results = body["results"].clone();
-                    if let Value::Array(_) = results {
+                    if let Value::Array(j) = &results {
+                        for item in j {
+                            println!("{}", item);
+                        }
                         Ok((StatusCode::FOUND, Json(results)))
                     } else {
                         Err((StatusCode::INTERNAL_SERVER_ERROR, "Parse results failed.".to_string()))
@@ -197,7 +214,7 @@ async fn post_database_item(req: Json<ReactorReqBody>) -> impl IntoResponse {
         .post("https://api.notion.com/v1/pages")
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::USER_AGENT, "Github Connector of Second State Reactor")
-        .header("Authorization", format!("Bearer {}", decrypt(req.state.clone())))
+        .header("Authorization", format!("Bearer {}", decrypt(&req.state)))
         .header("Notion-Version", "2022-06-28")
         .json(&body)
         .send()
@@ -227,7 +244,7 @@ async fn get_database(req: Json<ReactorReqBody>) -> impl IntoResponse {
         .get(format!("https://api.notion.com/v1/databases/{}", args.database_id))
         .header(header::CONTENT_TYPE, "application/json")
         .header(header::USER_AGENT, "Github Connector of Second State Reactor")
-        .header("Authorization", format!("Bearer {}", decrypt(req.state.clone())))
+        .header("Authorization", format!("Bearer {}", decrypt(&req.state)))
         .header("Notion-Version", "2022-06-28")
         .send()
         .await;
@@ -256,7 +273,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/post-database-item", post(post_database_item))
         .route("/get-database", get(get_database));
 
-    axum::Server::bind(&SocketAddr::from(([127, 0, 0, 1], port)))
+    let config = RustlsConfig::from_pem_file(
+            "./cert.pem",
+            "./key.pem",
+    )
+    .await
+    .expect("Can not found certificate(./cert.pem) and private key(./key.pem).");
+
+    axum_server::bind_rustls(SocketAddr::from(([127, 0, 0, 1], port)), config)
         .serve(app.into_make_service())
         .await?;
 
