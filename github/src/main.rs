@@ -297,7 +297,7 @@ async fn capture_event_inner(event: Event) {
                 },
             };
             let triggers = serde_json::json!({
-                "events": te,
+                "event": te,
                 "repo": payload["repository"]["node_id"].as_str().unwrap(),
             });
 
