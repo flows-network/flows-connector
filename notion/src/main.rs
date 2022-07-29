@@ -214,7 +214,7 @@ async fn databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
         ret.list.push(RouteItem { field: item.title[0].plain_text.clone(), value: item.id });
     }
 
-    Ok((StatusCode::FOUND, Json(ret)))
+    Ok((StatusCode::OK, Json(ret)))
 }
 
 // ref https://developers.notion.com/docs/working-with-databases
@@ -275,7 +275,7 @@ async fn post_msg(req: Json<ReactorReqBody>) -> impl IntoResponse {
         .await;
 
     match response {
-        Ok(_) => Ok((StatusCode::FOUND, "Ok.".to_string())),
+        Ok(_) => Ok((StatusCode::OK, "Ok.".to_string())),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR,
             format!("Post database item failed: {}.", e.to_string()))),
     }
@@ -288,7 +288,7 @@ struct Database {
 
 // ref https://developers.notion.com/reference/retrieve-a-database
 async fn properties(req: Json<ReactorReqBody>) -> impl IntoResponse {
-let database_id = if let Some(forwards) = &req.forwards {
+    let database_id = if let Some(forwards) = &req.forwards {
         if let Some(route) = forwards.first() {
             if route.route.eq("database") {
                 route.value.clone()
@@ -336,7 +336,7 @@ let database_id = if let Some(forwards) = &req.forwards {
         ret.list.push(RouteItem { field: name.clone(), value: name });
     }
 
-    Ok((StatusCode::FOUND, Json(ret)))
+    Ok((StatusCode::OK, Json(ret)))
 }
 
 #[tokio::main]
