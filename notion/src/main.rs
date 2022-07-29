@@ -9,7 +9,7 @@ use lazy_static::lazy_static;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rsa::{RsaPrivateKey, RsaPublicKey, PaddingScheme, PublicKey};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{env, net::SocketAddr, collections::HashMap};
 use reqwest::{Client, header};
@@ -156,6 +156,19 @@ struct DatabaseList {
     next_cursor: Value,
 }
 
+
+#[derive(Serialize)]
+struct RouteItem {
+    field: String,
+    value: String,
+}
+
+#[derive(Serialize)]
+struct RouteList {
+    cursor: Option<String>,
+    list: Vec<RouteItem>,
+}
+
 // ref https://developers.notion.com/reference/post-search
 async fn databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
     let mut body = json!({
@@ -191,23 +204,14 @@ async fn databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
         Err(e) => { return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())) },
     };
 
-    let mut ret = json!({
-        "list": Value::Array(Vec::new()),
-    });
+    let mut ret = RouteList { cursor: None, list: Vec::new() };
 
     if let Value::String(cursor) = &list.next_cursor {
-        ret.as_object_mut().unwrap()
-            .insert("next_cursor".to_string(), Value::String(cursor.clone()));
+        ret.cursor = Some(cursor.clone());
     }
 
-    let ret_list = ret.as_object_mut().unwrap()["list"].as_array_mut().unwrap();
-
     for item in list.results {
-        let value = json!({
-            "field": item.title[0].plain_text,
-            "value": item.id,
-        });
-        ret_list.push(value);
+        ret.list.push(RouteItem { field: item.title[0].plain_text.clone(), value: item.id });
     }
 
     Ok((StatusCode::FOUND, Json(ret)))
@@ -326,17 +330,10 @@ let database_id = if let Some(forwards) = &req.forwards {
             format!("Get database failed: {}", e.to_string()))),
     };
 
-    let mut ret = json!({
-        "list": Value::Array(Vec::new()),
-    });
-    let ret_list = ret.as_object_mut().unwrap()["list"].as_array_mut().unwrap();
+    let mut ret = RouteList { cursor: None, list: Vec::new() };
 
     for (name, _) in properties {
-        let value = json!({
-            "field": name,
-            "value": name,
-        });
-        ret_list.push(value);
+        ret.list.push(RouteItem { field: name.clone(), value: name });
     }
 
     Ok((StatusCode::FOUND, Json(ret)))
