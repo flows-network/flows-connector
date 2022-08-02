@@ -1,9 +1,12 @@
 /target
 .cargo
+Cargo.lock
 
 /linkinq
 /csvbox
-/gmail
 /liga
 
 .idea
+
+shell.nix
+default.nix
