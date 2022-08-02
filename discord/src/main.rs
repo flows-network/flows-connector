@@ -179,21 +179,18 @@ struct PostBody {
 }
 
 async fn post_msg(Json(msg_body): Json<PostBody>) -> Result<StatusCode, (StatusCode, &'static str)> {
+	println!("{}",msg_body.text);
+	
 	tokio::spawn(async move {
 		for pb in msg_body.forwards.iter() {
 			if pb.route.eq("channels") {
 				let request = serde_json::json!({
-					"content": "issue",
-					"tts": false,
-					"embeds": [{
-					  "title": "message issue",
-					  "description": msg_body.text
-					}]
+					"content": msg_body.text
 				  }
 				);
 	
 				tokio::spawn(new_http_client().post(format!("https://discord.com/api/channels/{}/messages",pb.value))
-					.header("Authorization",BOT_TOKEN.as_str())
+					.header("Authorization",format!("Bot {}", BOT_TOKEN.as_str()))
 					.json(&request)
 					.send());
 			}
@@ -258,7 +255,7 @@ struct RouteReq {
 async fn get_channels(id: &str) -> Result<Vec<ChannelName>, String> {
 	let response = new_http_client()
 		.get(format!("https://discord.com/api/guilds/{}/channels",id))
-		.header("Authorization",BOT_TOKEN.as_str())
+		.header("Authorization",format!("Bot {}", BOT_TOKEN.as_str()))
 		.send()
 		.await;
 	if let Ok(r) = response {
