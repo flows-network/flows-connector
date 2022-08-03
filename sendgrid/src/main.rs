@@ -111,40 +111,7 @@ struct PostBody {
 }
 
 async fn post_msg(Json(pb): Json<PostBody>) -> impl IntoResponse {
-    if let Ok(mb) = serde_json::from_str::<MailBody>(&pb.text) {
-        let request = serde_json::json!({
-            "personalizations": [
-                {
-                    "to": [
-                        {
-                            "email": mb.to_email
-                        }
-                    ]
-                }
-            ],
-            "from": {
-                "email": pb.user
-            },
-            "subject": mb.subject,
-            "content": [
-                {
-                    "type": "text/html",
-                    "value": mb.content
-                }
-            ]
-        });
-
-        let response = HTTP_CLIENT
-            .post("https://api.sendgrid.com/v3/mail/send")
-            .bearer_auth(decrypt(&pb.state))
-            .json(&request)
-            .send()
-            .await;
-        match response {
-            Ok(_) => (StatusCode::OK, String::from("")),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)),
-        }
-    } else if let Ok(mbs) = serde_json::from_str::<Vec<MailBody>>(&pb.text) {
+    if let Ok(mbs) = serde_json::from_str::<Vec<MailBody>>(&pb.text) {
         if mbs.is_empty() {
             return (StatusCode::BAD_REQUEST, String::from(""));
         }
