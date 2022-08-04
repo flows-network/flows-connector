@@ -4,7 +4,6 @@ use std::net::SocketAddr;
 use serde::{Serialize, Deserialize};
 use serde_json::Value;
 use lazy_static::lazy_static;
-use openssl::rsa::{Rsa, Padding};
 use reqwest::{Client, ClientBuilder};
 use axum::{
 	Router,
@@ -13,6 +12,14 @@ use axum::{
 	response::{IntoResponse},
 	http::{StatusCode},
 };
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
+
+const TIMEOUT: u64 = 120;
+
+const RSA_BITS: usize = 2048;
 
 lazy_static! {
 	static ref REACTOR_API_PREFIX: String = env::var("REACTOR_API_PREFIX").expect("Env variable REACTOR_API_PREFIX not set");
@@ -28,28 +35,45 @@ lazy_static! {
 
 	static ref BOT_TOKEN: String = env::var("BOT_TOKEN").expect("Env variable BOT_TOKEN not set");
 
-}
+	static ref RSA_RAND_SEED: [u8; 32] = env::var("RSA_RAND_SEED")
+        .expect("Env variable RSA_RAND_SEED not set")
+        .as_bytes()
+        .try_into()
+        .unwrap();
+	
+    static ref CHACHA8RNG: ChaCha8Rng = ChaCha8Rng::from_seed(*RSA_RAND_SEED);
+    static ref PRIV_KEY: RsaPrivateKey =
+        RsaPrivateKey::new(&mut CHACHA8RNG.clone(), RSA_BITS).expect("failed to generate a key");
+    static ref PUB_KEY: RsaPublicKey = RsaPublicKey::from(&*PRIV_KEY);
 
-const TIMEOUT: u64 = 120;
-
-
-fn new_http_client() -> Client {
-	let cb = ClientBuilder::new().timeout(Duration::from_secs(TIMEOUT));
-	return cb.build().unwrap();
+	static ref HTTP_CLIENT: Client = ClientBuilder::new()
+        .timeout(Duration::from_secs(TIMEOUT))
+        .build()
+        .expect("Can't build the reqwest client");
 }
 
 fn encrypt(data: &str) -> String {
-	let rsa = Rsa::public_key_from_pem(PUBLIC_KEY_PEM.as_bytes()).unwrap();
-	let mut buf: Vec<u8> = vec![0; rsa.size() as usize];
-	rsa.public_encrypt(data.as_bytes(), &mut buf, Padding::PKCS1).unwrap();
-	hex::encode(buf)
+    hex::encode(
+        PUB_KEY
+            .encrypt(
+                &mut CHACHA8RNG.clone(),
+                PaddingScheme::new_pkcs1v15_encrypt(),
+                data.as_bytes(),
+            )
+            .expect("failed to encrypt"),
+    )
 }
 
-fn decrypt(hex: &str) -> String {
-	let rsa = Rsa::private_key_from_pem_passphrase(PRIVATE_KEY_PEM.as_bytes(), PASSPHRASE.as_bytes()).unwrap();
-	let mut buf: Vec<u8> = vec![0; rsa.size() as usize];
-	let l = rsa.private_decrypt(&hex::decode(hex).unwrap(), &mut buf, Padding::PKCS1).unwrap();
-	String::from_utf8(buf[..l].to_vec()).unwrap()
+fn decrypt(data: &str) -> String {
+    String::from_utf8(
+        PRIV_KEY
+            .decrypt(
+                PaddingScheme::new_pkcs1v15_encrypt(),
+                &hex::decode(data).unwrap(),
+            )
+            .expect("failed to decrypt"),
+    )
+    .unwrap()
 }
 
 
@@ -112,7 +136,8 @@ async fn get_access_token(code: &str) -> Result<OAuthBody, String> {
 		("redirect_uri", DISCORD_REDIRECT_URL.as_str()),
 	];
 
-	let response = new_http_client().post("https://discord.com/api/oauth2/token")
+	let response = HTTP_CLIENT
+		.post("https://discord.com/api/oauth2/token")
 		.form(&params)
 		.send()
 		.await;
@@ -136,7 +161,8 @@ async fn get_access_token(code: &str) -> Result<OAuthBody, String> {
 }
 
 async fn get_authed_user(access_token: &str) -> Result<(String, String), String> {
-	let response = new_http_client().get("https://discord.com/api/oauth2/@me")
+	let response = HTTP_CLIENT
+		.get("https://discord.com/api/oauth2/@me")
 		.bearer_auth(access_token)
 		.send()
 		.await;
@@ -189,7 +215,8 @@ async fn post_msg(Json(msg_body): Json<PostBody>) -> Result<StatusCode, (StatusC
 				  }
 				);
 	
-				tokio::spawn(new_http_client().post(format!("https://discord.com/api/channels/{}/messages",pb.value))
+				tokio::spawn(HTTP_CLIENT
+					.post(format!("https://discord.com/api/channels/{}/messages",pb.value))
 					.header("Authorization",format!("Bot {}", BOT_TOKEN.as_str()))
 					.json(&request)
 					.send());
@@ -214,7 +241,8 @@ async fn refresh_token(Json(msg_body): Json<RefreshState>) -> impl IntoResponse 
 		("refresh_token", &decrypt(&msg_body.refresh_state)),
 	];
 
-	let response = new_http_client().post("https://discord.com/api/oauth2/token")
+	let response = HTTP_CLIENT
+		.post("https://discord.com/api/oauth2/token")
 		.form(&params)
 		.send()
 		.await;
@@ -253,7 +281,7 @@ struct RouteReq {
 }
 
 async fn get_channels(id: &str) -> Result<Vec<ChannelName>, String> {
-	let response = new_http_client()
+	let response = HTTP_CLIENT
 		.get(format!("https://discord.com/api/guilds/{}/channels",id))
 		.header("Authorization",format!("Bot {}", BOT_TOKEN.as_str()))
 		.send()

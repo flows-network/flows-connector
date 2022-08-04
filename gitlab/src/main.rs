@@ -4,7 +4,6 @@ use std::net::SocketAddr;
 use serde::{Serialize, Deserialize};
 use serde_json::{json, Value};
 use lazy_static::lazy_static;
-use openssl::rsa::{Rsa, Padding};
 use reqwest::{Client, ClientBuilder};
 use axum::{
 	Router,
@@ -13,6 +12,14 @@ use axum::{
 	response::{IntoResponse},
 	http::{StatusCode,header},
 };
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use rand::SeedableRng;
+use rand_chacha::ChaCha8Rng;
+use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
+
+const TIMEOUT: u64 = 120;
+
+const RSA_BITS: usize = 2048;
 
 lazy_static! {
 	static ref REACTOR_API_PREFIX: String = env::var("REACTOR_API_PREFIX").expect("Env variable REACTOR_API_PREFIX not set");
@@ -23,34 +30,46 @@ lazy_static! {
 	static ref GITLAB_REDIRECT_URL: String = env::var("GITLAB_REDIRECT_URL").expect("Env variable GITLAB_REDIRECT_URL not set");
 	static ref SERVICE_API_PREFIX: String = env::var("SERVICE_API_PREFIX").expect("Env var SERVICE_API_PREFIX not set");
 
-	static ref PASSPHRASE: String = env::var("PASSPHRASE").expect("Env variable PASSPHRASE not set");
-	static ref PUBLIC_KEY_PEM: String = env::var("PUBLIC_KEY_PEM").expect("Env variable PUBLIC_KEY_PEM not set");
-	static ref PRIVATE_KEY_PEM: String = env::var("PRIVATE_KEY_PEM").expect("Env variable PRIVATE_KEY_PEM not set");
+	static ref RSA_RAND_SEED: [u8; 32] = env::var("RSA_RAND_SEED")
+        .expect("Env variable RSA_RAND_SEED not set")
+        .as_bytes()
+        .try_into()
+        .unwrap();
+	
+    static ref CHACHA8RNG: ChaCha8Rng = ChaCha8Rng::from_seed(*RSA_RAND_SEED);
+    static ref PRIV_KEY: RsaPrivateKey =
+        RsaPrivateKey::new(&mut CHACHA8RNG.clone(), RSA_BITS).expect("failed to generate a key");
+    static ref PUB_KEY: RsaPublicKey = RsaPublicKey::from(&*PRIV_KEY);
 
-}
-
-const TIMEOUT: u64 = 120;
-
-
-fn new_http_client() -> Client {
-	let cb = ClientBuilder::new().timeout(Duration::from_secs(TIMEOUT));
-	return cb.build().unwrap();
+	static ref HTTP_CLIENT: Client = ClientBuilder::new()
+        .timeout(Duration::from_secs(TIMEOUT))
+        .build()
+        .expect("Can't build the reqwest client");
 }
 
 fn encrypt(data: &str) -> String {
-	let rsa = Rsa::public_key_from_pem(PUBLIC_KEY_PEM.as_bytes()).unwrap();
-	let mut buf: Vec<u8> = vec![0; rsa.size() as usize];
-	rsa.public_encrypt(data.as_bytes(), &mut buf, Padding::PKCS1).unwrap();
-	hex::encode(buf)
+    hex::encode(
+        PUB_KEY
+            .encrypt(
+                &mut CHACHA8RNG.clone(),
+                PaddingScheme::new_pkcs1v15_encrypt(),
+                data.as_bytes(),
+            )
+            .expect("failed to encrypt"),
+    )
 }
 
-fn decrypt(hex: &str) -> String {
-	let rsa = Rsa::private_key_from_pem_passphrase(PRIVATE_KEY_PEM.as_bytes(), PASSPHRASE.as_bytes()).unwrap();
-	let mut buf: Vec<u8> = vec![0; rsa.size() as usize];
-	let l = rsa.private_decrypt(&hex::decode(hex).unwrap(), &mut buf, Padding::PKCS1).unwrap();
-	String::from_utf8(buf[..l].to_vec()).unwrap()
+fn decrypt(data: &str) -> String {
+    String::from_utf8(
+        PRIV_KEY
+            .decrypt(
+                PaddingScheme::new_pkcs1v15_encrypt(),
+                &hex::decode(data).unwrap(),
+            )
+            .expect("failed to decrypt"),
+    )
+    .unwrap()
 }
-
 
 #[derive(Deserialize, Serialize)]
 struct AuthBody {
@@ -109,7 +128,8 @@ async fn get_access_token(code: &str) -> Result<OAuthBody, String> {
 		("redirect_uri", GITLAB_REDIRECT_URL.as_str()),
 	];
 
-	let response = new_http_client().post("https://gitlab.com/oauth/token")
+	let response = HTTP_CLIENT
+		.post("https://gitlab.com/oauth/token")
 		.form(&params)
 		.send()
 		.await;
@@ -136,7 +156,8 @@ async fn get_authed_user(access_token: &str) -> Result<(String, String), String>
 
 	// println!("{}",access_token);
 
-	let response = new_http_client().get("https://gitlab.com/api/v4/user")
+	let response = HTTP_CLIENT
+		.get("https://gitlab.com/api/v4/user")
 		.bearer_auth(access_token)
 		.send()
 		.await;
@@ -178,7 +199,8 @@ async fn refresh_token(Json(msg_body): Json<RefreshState>) -> impl IntoResponse 
 		("refresh_token", &decrypt(&msg_body.refresh_state)),
 	];
 
-	let response = new_http_client().post("https://gitlab.com/oauth/token")
+	let response = HTTP_CLIENT
+		.post("https://gitlab.com/oauth/token")
 		.form(&params)
 		.send()
 		.await;
@@ -217,7 +239,7 @@ struct RouteReq {
 }
 
 async fn get_projects(token: &str) -> Result<Vec<ProjectName>, String> {
-	let response = new_http_client()
+	let response = HTTP_CLIENT
 		.get(format!("https://gitlab.com/api/v4/projects?access_token={}&owned=true",token))
 		.send()
 		.await;
@@ -334,7 +356,8 @@ async fn create_hook_inner(connector: &str, flow_id: &str, repo_full_name: &str,
 		"merge_requests_events": true,
 		"issues_events": true
 	});
-	let response = new_http_client().post(format!("https://gitlab.com/api/v4/projects/{}/hooks",id))
+	let response = HTTP_CLIENT
+		.post(format!("https://gitlab.com/api/v4/projects/{}/hooks",id))
 		.header("Accept", "application/json")
 		.bearer_auth(token)
 		.json(&param)
@@ -393,7 +416,8 @@ async fn post_event_to_reactor(user: &str, flow: &str, text: &str, triggers: Val
 		"triggers": triggers,
 	});
 
-	let response = new_http_client().post(format!("{}/api/_funcs/_post", REACTOR_API_PREFIX.as_str()))
+	let response = HTTP_CLIENT
+		.post(format!("{}/api/_funcs/_post", REACTOR_API_PREFIX.as_str()))
 		.header(header::AUTHORIZATION, REACTOR_AUTH_TOKEN.as_str())
 		.json(&request)
 		.send()
@@ -428,7 +452,8 @@ async fn revoke_hook(Json(req): Json<RevokeHookReq>, Query(query): Query<RevokeQ
 }
 
 async fn revoke_hook_inner(project: &str, hook_id: &str, token: &str) -> Result<(), String> {
-	let response = new_http_client().delete(format!("https://gitlab.com/api/v4/projects/{}/hooks/{}",project,hook_id))
+	let response = HTTP_CLIENT
+		.delete(format!("https://gitlab.com/api/v4/projects/{}/hooks/{}",project,hook_id))
 		.bearer_auth(token)
 		.send()
 		.await;
