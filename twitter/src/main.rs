@@ -12,7 +12,7 @@ use rand_chacha::ChaCha8Rng;
 use reqwest::{Client, ClientBuilder, header};
 use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 use std::{
     collections::HashMap,
     env,
@@ -33,15 +33,22 @@ lazy_static! {
     static ref CONNECTOR_DOMAIN: String = env::var("CONNECTOR_DOMAIN")
         .expect("Env variable CONNECTOR_DOMAIN not set");       // eg. https://twitter.reactor.io or https://localhost:8090
         
-    static ref TWITTER_ENV_NAME: String = env::var("TWITTER_ENV_NAME")      // App name
-        .expect("Env variable TWITTER_ENV_NAME not set");
-
+    static ref TWITTER_APP_ID: String = env::var("TWITTER_APP_ID")
+        .expect("Env variable TWITTER_APP_ID not set");
     static ref TWITTER_CONSUMER: Token<'static> = Token::new(
         env::var("TWITTER_CONSUMER_KEY").expect("Env variable TWITTER_CONSUMER_KEY not set"),
         env::var("TWITTER_CONSUMER_SECRET").expect("Env variable TWITTER_CONSUMER_SECRET not set"));
+    static ref TWITTER_BEARER_TOKEN: String = env::var("TWITTER_BEADER_TOKEN")
+        .expect("Env variable TWITTER_BEADER_TOKEN not set");
 
-    static ref ACCESS_TOKEN: Mutex<String> = Mutex::new(String::new());
-    static ref ACCESS_TOKEN_SECRET: Mutex<String> = Mutex::new(String::new());
+    static ref DEV_ACCESS_TOKEN: Token<'static> = Token::new(
+        env::var("ACCESS_TOKEN").expect("Env variable ACCESS_TOKEN not set"),
+        env::var("ACCESS_TOKEN_SECRET").expect("Env variable ACCESS_TOKEN_SECRET not set"));
+
+    static ref ACCESS_TOKEN: String = env::var("ACCESS_TOKEN")
+        .expect("Env variable ACCESS_TOKEN not set");           // Dev access token
+    static ref ACCESS_TOKEN_SECRET: String = env::var("ACCESS_TOKEN_SECRET")
+        .expect("Env variable ACCESS_TOKEN_SECRET not set");    // Dev access token secret
 
     static ref TWITTER_WEBHOOK_ID: Mutex<String> = Mutex::new(String::new());
 
@@ -96,38 +103,21 @@ async fn auth(req: Query<AuthBody>) -> impl IntoResponse {
         return Err((StatusCode::BAD_REQUEST, "Missing oauth_token or oauth_verifier".to_string()));
     }
 
-    match get_access_token(&req).await {
-        Ok(at) => match get_authed_user(&at).await {
-            Ok(person) => {
-                let location = format!(
-                    "{}/api/connected?authorId={}&authorName={}&authorState={}",
-                    REACTOR_API_PREFIX.as_str(),
-                    person.id,
-                    urlencoding::encode(&person.name),
-                    encrypt(&serde_json::to_string(&at).unwrap()),
-                );
+    let at = get_access_token(&req).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-                Ok((StatusCode::OK, [("Location", location)]))
-            }
-            Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
-        },
-        Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
-    }
-}
+    let person = get_authed_user(&at).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-async fn admin_auth(req: Query<AuthBody>) -> impl IntoResponse {
-    if req.oauth_token.is_empty() || req.oauth_verifier.is_none() {
-        return Err((StatusCode::BAD_REQUEST, "Missing oauth_token or oauth_verifier".to_string()));
-    }
+    let location = format!(
+        "{}/api/connected?authorId={}&authorName={}&authorState={}",
+        REACTOR_API_PREFIX.as_str(),
+        person.id,
+        urlencoding::encode(&person.name),
+        encrypt(&serde_json::to_string(&at).unwrap()),
+    );
 
-    match get_access_token(&req).await {
-        Ok(at) => {
-            *ACCESS_TOKEN.lock().unwrap() = at.oauth_token;
-            *ACCESS_TOKEN_SECRET.lock().unwrap() = at.oauth_token_secret.unwrap();
-            Ok((StatusCode::OK, "Admin login successfully".to_string()))
-        },
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
-    }
+    Ok((StatusCode::OK, [("Location", location)]))
 }
 
 async fn get_access_token(auth: &AuthBody) -> Result<AuthBody, String> {
@@ -136,26 +126,18 @@ async fn get_access_token(auth: &AuthBody) -> Result<AuthBody, String> {
         ("oauth_verifier", auth.oauth_verifier.clone().unwrap()),
     ];
 
-    let response = HTTP_CLIENT
+    let body = HTTP_CLIENT
         .post("https://api.twitter.com/oauth/access_token")
         .query(&params)
         .send()
-        .await;
+        .await
+        .map_err(|e| e.to_string())?
+        .bytes()
+        .await
+        .map_err(|e| e.to_string())?;
 
-    let auth = match response {
-        Ok(resp) => {
-            match resp.bytes().await {
-                Ok(body) => {
-                    match serde_urlencoded::from_bytes::<AuthBody>(&body) {
-                        Ok(a) => a,
-                        Err(e) => return Err(e.to_string()),
-                    }
-                },
-                Err(e) => return Err(e.to_string()),
-            }
-        }
-        Err(_) => return Err("Failed to get access token".to_string()),
-    };
+    let auth = serde_urlencoded::from_bytes::<AuthBody>(&body)
+        .map_err(|e| e.to_string())?;
 
     if auth.oauth_token.is_empty() || auth.oauth_token_secret.is_none() {
         return Err("Failed to get access token".to_string());
@@ -176,7 +158,7 @@ struct UserData {
 }
 
 async fn get_authed_user(access_token: &AuthBody) -> Result<UserData, String> {
-    let response = HTTP_CLIENT
+    HTTP_CLIENT
         .get("https://api.twitter.com/2/users/me")
         .header(header::AUTHORIZATION,
             oauth1::authorize("GET", "https://api.twitter.com/2/users/me",
@@ -185,15 +167,13 @@ async fn get_authed_user(access_token: &AuthBody) -> Result<UserData, String> {
                 access_token.oauth_token_secret.clone().unwrap())),
             None))
         .send()
-        .await;
+        .await
+        .map_err(|_| "Failed to get user's profile".to_string())?
 
-    match response {
-        Ok(res) => match res.json::<User>().await {
-            Ok(u) => Ok(u.data),
-            Err(_) => Err("Failed to get user's profile".to_string()),
-        },
-        Err(_) => Err("Failed to get user's profile".to_string()),
-    }
+        .json::<User>()
+        .await
+        .map(|u| u.data)
+        .map_err(|e| e.to_string())
 }
 
 async fn actions() -> impl IntoResponse {
@@ -222,32 +202,27 @@ struct PostBody {
     forwards: Vec<ForwardRoute>,
 }
 
-async fn post_msg(Json(msg_body): Json<PostBody>) -> impl IntoResponse {
+async fn post_msg(msg_body: Json<PostBody>) -> impl IntoResponse {
     let routes = msg_body
         .forwards
         .iter()
         .map(|route| (route.route.clone(), route.value.clone()))
         .collect::<HashMap<String, String>>();
 
-    let action = match routes.get("action") {
-        Some(a) => a,
-        None => return Err((StatusCode::BAD_REQUEST, "Missing action".to_string())),
-    };
+    let action = routes.get("action")
+        .ok_or((StatusCode::BAD_REQUEST, "Missing action".to_string()))?;
 
-    let auth = match serde_json::from_str::<AuthBody>(&decrypt(&msg_body.state)) {
-        Ok(a) => {
-            if a.oauth_token.is_empty() || a.oauth_token_secret.is_none() {
-                return Err((StatusCode::BAD_REQUEST,
-                    "Missing oauth_token or oauth_token_secret".to_string()));
-            }
-            a
-        },
-        Err(e) => return Err((StatusCode::BAD_REQUEST, e.to_string()))
-    };
+    let auth = serde_json::from_str::<AuthBody>(&decrypt(&msg_body.state))
+        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
+
+    if auth.oauth_token.is_empty() || auth.oauth_token_secret.is_none() {
+        return Err((StatusCode::BAD_REQUEST,
+            "Missing oauth_token or oauth_token_secret".to_string()));
+    }
 
     match action.as_str() {
         "create-tweet" => {
-            let resp = HTTP_CLIENT
+            HTTP_CLIENT
                 .post("https://api.twitter.com/2/tweets")
                 .header(header::AUTHORIZATION,
                     oauth1::authorize("GET",
@@ -259,13 +234,10 @@ async fn post_msg(Json(msg_body): Json<PostBody>) -> impl IntoResponse {
                     "text": msg_body.text
                 }))
                 .send()
-                .await;
+                .await
 
-            if resp.is_ok() {
-                Ok((StatusCode::FOUND, "Ok"))
-            } else {
-                Err((StatusCode::INTERNAL_SERVER_ERROR, "Create tweet failed".to_string()))
-            }
+                .map(|_| (StatusCode::OK, "OK".to_string()))
+                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Create tweet failed".to_string()))
         }
         _ => Err((StatusCode::BAD_REQUEST, "Unsupport action".to_string())),
     }
@@ -285,47 +257,30 @@ async fn webhook_challenge(req: Query<CrcRequest>) -> impl IntoResponse {
     })))
 }
 
-#[derive(Deserialize)]
-struct LoginRole {
-    role: String,
-}
+async fn login() -> impl IntoResponse {
+    let params = [("oauth_callback", format!("{}/auth", *CONNECTOR_DOMAIN))];
 
-async fn login(req: Query<LoginRole>) -> impl IntoResponse {
-    let callback = match req.role.as_str() {
-        "user" => format!("{}/auth", *CONNECTOR_DOMAIN),
-        "admin" => format!("{}/admin-auth", *CONNECTOR_DOMAIN),
-        _ => return Err((StatusCode::BAD_REQUEST, "Invalid role".to_string())),
-    };
-
-    let params = [("oauth_callback", callback)];
-
-    let response = Client::new()
+    let body = HTTP_CLIENT
         .post("https://api.twitter.com/oauth/request_token")
         .query(&params)
         .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
         .header(header::AUTHORIZATION,
             oauth1::authorize("POST", 
             "https://api.twitter.com/oauth/request_token",
-            &*TWITTER_CONSUMER, None, Some(params
+            &*TWITTER_CONSUMER, None, Some(
+                params
                 .into_iter()
                 .map(|item| (item.0, Cow::from(item.1))).collect())))
         .send()
-        .await;
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
 
-    let tokens = match response {
-        Ok(resp) => {
-            match resp.bytes().await {
-                Ok(body) => {
-                    match serde_urlencoded::from_bytes::<AuthBody>(&body) {
-                        Ok(a) => a,
-                        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
-                    }
-                },
-                Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
-            }
-        },
-        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
-    };
+        .bytes()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+
+    let tokens = serde_urlencoded::from_bytes::<AuthBody>(&body)
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
     if tokens.oauth_token.is_empty() {
         return Err((StatusCode::INTERNAL_SERVER_ERROR, "Parse OAuth body failed".to_string()));
@@ -338,11 +293,112 @@ async fn login(req: Query<LoginRole>) -> impl IntoResponse {
     Ok((StatusCode::FOUND, [("Location", location)]))
 }
 
+#[allow(dead_code)]
+#[derive(Debug, Deserialize)]
+struct Webhook {
+    id: String,
+    url: String,
+    valid: bool,
+    created_at: String,
+}
+
+#[derive(Deserialize)]
+struct Environment {
+    webhooks: Vec<Webhook>,
+}
+
+#[derive(Deserialize)]
+struct Webhooks {
+    environments: Vec<Environment>,
+}
+
+async fn fetch_webhooks() -> Result<Vec<Webhook>, Box<dyn std::error::Error>> {
+    let json = HTTP_CLIENT
+        .get("https://api.twitter.com/1.1/account_activity/all/webhooks.json")
+        .bearer_auth(&*TWITTER_BEARER_TOKEN)
+        .send()
+        .await?
+        .json::<Webhooks>()
+        .await?;
+
+    let mut ret = Vec::new();
+
+    for env in json.environments {
+        for hook in env.webhooks {
+            ret.push(hook);
+        }
+    }
+
+    Ok(ret)
+}
+
+async fn register_webhook() -> Result<Webhook, Box<dyn std::error::Error>> {
+    let url = format!(
+        "https://api.twitter.com/1.1/account_activity/all/{}/webhooks.json",
+        *TWITTER_APP_ID);
+
+    let params = [("url", format!("{}/crc", &*CONNECTOR_DOMAIN))];
+
+    let response = HTTP_CLIENT
+        .post(url.clone())
+        .query(&params)
+        .header(header::AUTHORIZATION,
+            oauth1::authorize("POST",
+                &url,
+                &*TWITTER_CONSUMER,
+                Some(&*DEV_ACCESS_TOKEN),
+                Some(
+                    params
+                    .into_iter()
+                    .map(|item| (item.0, Cow::from(item.1))).collect())))
+        .send()
+        .await?;
+
+    Ok(response.json::<Webhook>().await?)
+}
+
+async fn reenable_webhook(hook: &Webhook) -> Result<(), Box<dyn std::error::Error>> {
+    let url = format!(
+        "https://api.twitter.com/1.1/account_activity/all/{}/webhooks/{}.json",
+        *TWITTER_APP_ID, hook.id);
+
+    HTTP_CLIENT
+        .put(url.clone())
+        .header(header::AUTHORIZATION,
+            oauth1::authorize("PUT",
+                &url,
+                &*TWITTER_CONSUMER,
+                Some(&*DEV_ACCESS_TOKEN),
+                None))
+        .send()
+        .await?;
+
+    Ok(())
+}
+
+async fn init_webhook() -> Result<(), Box<dyn std::error::Error>> {
+    let hooks = fetch_webhooks().await?;
+
+    let hook = if hooks.is_empty() {
+        register_webhook().await?
+    } else {
+        let hook = hooks.first().unwrap();
+        if !hook.valid {
+            reenable_webhook(hook).await?;
+        }
+        hooks.into_iter().next().unwrap()
+    };
+
+    println!("{:#?}", hook);
+    *TWITTER_WEBHOOK_ID.lock()? = hook.id;
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/auth", get(auth))
-        .route("/admin-auth", get(admin_auth))
         .route("/actions", post(actions))
         .route("/post", post(post_msg))
         .route("/login", get(login))
@@ -356,6 +412,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await?;
+
+    init_webhook().await?;
 
     Ok(())
 }
