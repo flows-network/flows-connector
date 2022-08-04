@@ -155,7 +155,7 @@ async fn post_msg(Json(pb): Json<PostBody>) -> impl IntoResponse {
             let to_email = mb.to_email;
             emails
                 .entry(mb.content)
-                .or_insert(vec![(subject.clone(), to_email.clone())])
+                .or_insert(vec![])
                 .push((subject, to_email));
         }
 
@@ -164,7 +164,7 @@ async fn post_msg(Json(pb): Json<PostBody>) -> impl IntoResponse {
                 .into_iter()
                 .map(|(subject, to_email)| {
                     serde_json::json!({
-                        "to": to_email,
+                        "to": [{"email": to_email}],
                         "subject": subject,
                     })
                 })
