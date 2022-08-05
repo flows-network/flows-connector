@@ -10,10 +10,10 @@ use lazy_static::lazy_static;
 use reqwest::{multipart, Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use urlencoding::encode;
 use std::env;
 use std::net::SocketAddr;
 use std::time::Duration;
+use urlencoding::encode;
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
