@@ -225,7 +225,7 @@ async fn post_msg(msg_body: Json<ReactorBody>) -> impl IntoResponse {
             HTTP_CLIENT
                 .post("https://api.twitter.com/2/tweets")
                 .header(header::AUTHORIZATION,
-                    oauth1::authorize("GET",
+                    oauth1::authorize("POST",
                     "https://api.twitter.com/2/tweets",
                     &*TWITTER_CONSUMER,
                     Some(&Token::new(auth.oauth_token, auth.oauth_token_secret.unwrap())),
