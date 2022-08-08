@@ -10,10 +10,10 @@ use lazy_static::lazy_static;
 use reqwest::{multipart, Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use urlencoding::encode;
 use std::env;
 use std::net::SocketAddr;
 use std::time::Duration;
+use urlencoding::encode;
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -237,7 +237,10 @@ async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, cha
         let mut request = multipart::Form::new()
             .text("user", user)
             .text("text", text)
-            .text("triggers", format!(r#"{{"channels": "{}", "event": "get message"}}"#, channel));
+            .text(
+                "triggers",
+                format!(r#"{{"channels": "{}", "event": "get message"}}"#, channel),
+            );
 
         for f in files.into_iter() {
             if let Ok(b) = get_file(&access_token, &f.url_private).await {
@@ -556,7 +559,7 @@ struct HookRouteObject {
 
 #[derive(Debug, Deserialize)]
 struct HookRoutes {
-    channels: HookRouteObject,
+    channels: Vec<HookRouteObject>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -569,22 +572,24 @@ struct JoinChannelReq {
 async fn join_channel(Json(req): Json<JoinChannelReq>) -> impl IntoResponse {
     let access_token = decrypt(req.state.as_str());
 
-    return match view_channel(&access_token, &req.routes.channels.value).await {
-        Some(ch) => {
-            if ch.is_channel.is_some()
-                && ch.is_channel.unwrap()
-                && (ch.is_member.is_some() && !ch.is_member.unwrap())
-            {
-                match join_channel_inner(&req.routes.channels.value, &access_token).await {
-                    Ok(v) => Ok((StatusCode::CREATED, Json(v))),
-                    Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
+    for chr in req.routes.channels {
+        match view_channel(&access_token, &chr.value).await {
+            Some(ch) => {
+                if ch.is_channel.is_some()
+                    && ch.is_channel.unwrap()
+                    && (ch.is_member.is_some() && !ch.is_member.unwrap())
+                {
+                    if let Err(err_msg) = join_channel_inner(&chr.value, &access_token).await {
+                        return Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg));
+                    }
                 }
-            } else {
-                Ok((StatusCode::OK, Json(())))
             }
-        }
-        None => Err((StatusCode::BAD_REQUEST, "Channel not found".to_string())),
-    };
+            None => {
+                return Err((StatusCode::BAD_REQUEST, "Channel not found".to_string()));
+            }
+        };
+    }
+    Ok((StatusCode::OK, Json(())))
 }
 
 async fn join_channel_inner(channel: &str, access_token: &str) -> Result<(), String> {
