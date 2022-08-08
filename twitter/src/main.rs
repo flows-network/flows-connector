@@ -393,7 +393,7 @@ async fn init_webhook() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-async fn sunscribe_events() -> impl IntoResponse {
+async fn subscribe_events() -> impl IntoResponse {
     Json(json!({
         "list": [
             {
@@ -542,7 +542,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         
         .route("/webhook", get(webhook_challenge))
         .route("/webhook", post(capture_event))
-        .route("/sunscribe-events", post(sunscribe_events))
+        .route("/subscribe-events", post(subscribe_events))
         .route("/subscribe", get(subscribe))
         .route("/unsubscribe", get(unsubscribe));
 
