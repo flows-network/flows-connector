@@ -16,7 +16,6 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use rand::{distributions::Alphanumeric, Rng};
 use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -416,8 +415,8 @@ struct HookRouteObject {
 }
 #[derive(Debug, Deserialize)]
 struct HookRoutes {
-    event: HookRouteObject,
-    repo: HookRouteObject,
+    event: Vec<HookRouteObject>,
+    repo: Vec<HookRouteObject>,
 }
 #[derive(Debug, Deserialize)]
 struct HookReq {
@@ -428,18 +427,17 @@ struct HookReq {
 }
 
 async fn create_hook(Json(req): Json<HookReq>) -> impl IntoResponse {
+    if req.routes.event.len() == 0 || req.routes.repo.len() != 1 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            String::from("Bad routes, only one repo is allowed"),
+        ));
+    }
     let auth_state = serde_json::from_str::<AuthState>(&decrypt(&req.state)).unwrap();
 
     match get_installation_token(auth_state.installation_id).await {
         Ok(install_token) => {
-            match create_hook_inner(
-                &req.user,
-                &req.flow,
-                &req.routes,
-                &install_token,
-            )
-            .await
-            {
+            match create_hook_inner(&req.user, &req.flow, &req.routes, &install_token).await {
                 Ok(v) => Ok((StatusCode::CREATED, Json(v))),
                 Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
             }
@@ -454,23 +452,20 @@ async fn create_hook_inner(
     routes: &HookRoutes,
     install_token: &str,
 ) -> Result<Value, String> {
-    let rand_str: String = rand::thread_rng()
-        .sample_iter(&Alphanumeric)
-        .take(10)
-        .map(char::from)
-        .collect();
+    let events: Vec<String> = routes.event.iter().map(|e| e.value.clone()).collect();
     let param = json!({
         "name": "web",
         "active": true,
-        "events": [routes.event.value],
+        "events": events,
         "config": {
-            "url": format!("{}/event?connector={connector}&flow={flow_id}&rand={rand_str}", SERVICE_API_PREFIX.as_str()),
+            "url": format!("{}/event?connector={connector}&flow={flow_id}", SERVICE_API_PREFIX.as_str()),
             "content_type": "form",
         }
     });
     let response = HTTP_CLIENT
         .post(format!(
-            "https://api.github.com/repos/{}/hooks", routes.repo.field
+            "https://api.github.com/repos/{}/hooks",
+            routes.repo[0].field
         ))
         .header("Accept", "application/vnd.github.v3+json")
         .header("User-Agent", "Github Connector of Second State Reactor")
@@ -506,6 +501,13 @@ async fn revoke_hook(
     Json(req): Json<HookReq>,
     Query(query): Query<RevokeQuery>,
 ) -> impl IntoResponse {
+    if req.routes.event.len() == 0 || req.routes.repo.len() != 1 {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            String::from("Bad routes, only one repo is allowed"),
+        ));
+    }
+
     let auth_state = serde_json::from_str::<AuthState>(&decrypt(&req.state)).unwrap();
 
     match get_installation_token(auth_state.installation_id).await {
@@ -526,7 +528,8 @@ async fn revoke_hook_inner(
 ) -> Result<(), String> {
     let response = HTTP_CLIENT
         .delete(format!(
-            "https://api.github.com/repos/{}/hooks/{hook_id}", routes.repo.field
+            "https://api.github.com/repos/{}/hooks/{hook_id}",
+            routes.repo[0].field
         ))
         .header(header::ACCEPT, "application/vnd.github.v3+json")
         .header(
