@@ -13,7 +13,7 @@ use std::{env, net::SocketAddr, time::Duration};
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use reqwest::{multipart, Client, ClientBuilder};
+use reqwest::{Client, ClientBuilder};
 use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 
 const RSA_BITS: usize = 2048;
@@ -198,9 +198,6 @@ async fn upload_msg(
             if let Ok(mut t) = text_ {
                 let mut atchsmts = vec![];
                 for (file_name, content_type, datum) in data.into_iter() {
-                    // dbg!(&file_name, &content_type);
-                    // FIX file_name: untitled
-
                     let name: String = file_name.chars().take_while(|&c| c != '.').collect();
 
                     let content = base64::encode(datum);
@@ -215,12 +212,15 @@ async fn upload_msg(
                     }));
                 }
 
-                t.as_object_mut().and_then(|obj| {
-                    Some(
-                        obj.entry("attachments")
-                            .or_insert(serde_json::json!(atchsmts)),
-                    )
-                });
+                // NOTE every email were injected the same attachments
+                for o in t.as_array_mut().unwrap() {
+                    o.as_object_mut().and_then(|obj| {
+                        Some(
+                            obj.entry("attachments")
+                                .or_insert(serde_json::json!(atchsmts)),
+                        )
+                    });
+                }
 
                 text = t.to_string();
             } else {
@@ -229,7 +229,6 @@ async fn upload_msg(
         }
 
         if text.len() > 0 {
-            // dbg!(&text);
             tokio::spawn(post_msg(Json::from(PostBody { user, text, state })));
         }
     });
