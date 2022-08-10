@@ -306,12 +306,17 @@ async fn get_file(access_token: &str, url_private: &str) -> Result<Vec<u8>, ()> 
     Err(())
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct ForwardRoutes {
+    channels: Vec<RouteObject>,
+}
+
 #[derive(Deserialize, Serialize)]
 struct PostBody {
     user: String,
     text: String,
     state: String,
-    forwards: HookRoutes,
+    forwards: ForwardRoutes,
 }
 
 async fn post_msg(
@@ -397,7 +402,7 @@ async fn upload_msg(
                 }
                 "forwards" => {
                     if let Ok(f) = field.text().await {
-                        if let Ok(fws) = serde_json::from_str::<HookRoutes>(&f) {
+                        if let Ok(fws) = serde_json::from_str::<ForwardRoutes>(&f) {
                             forwards = Some(fws);
                         }
                     }
@@ -544,14 +549,14 @@ async fn route_channels(Json(body): Json<RouteReq>) -> impl IntoResponse {
     }
 }
 #[derive(Debug, Serialize, Deserialize)]
-struct HookRouteObject {
+struct RouteObject {
     // field: String,
     value: String,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct HookRoutes {
-    channels: Vec<HookRouteObject>,
+    channels: Vec<RouteObject>,
 }
 
 #[derive(Debug, Deserialize)]

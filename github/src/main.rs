@@ -426,15 +426,15 @@ async fn get_author_token_from_reactor(user: &str) -> Result<String, ()> {
     Err(())
 }
 
-#[derive(Debug, Deserialize)]
-struct HookRouteObject {
+#[derive(Debug, Serialize, Deserialize)]
+struct RouteObject {
     field: String,
     value: String,
 }
 #[derive(Debug, Deserialize)]
 struct HookRoutes {
-    event: Vec<HookRouteObject>,
-    repo: Vec<HookRouteObject>,
+    event: Vec<RouteObject>,
+    repo: Vec<RouteObject>,
 }
 #[derive(Debug, Deserialize)]
 struct HookReq {
@@ -705,11 +705,10 @@ async fn actions() -> impl IntoResponse {
     });
     Json(events)
 }
-
-#[derive(Debug, Deserialize, Serialize)]
-struct ForwardRoute {
-    route: String,
-    value: String,
+#[derive(Debug, Serialize, Deserialize)]
+struct ForwardRoutes {
+    action: Vec<RouteObject>,
+    repo: Vec<RouteObject>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -717,7 +716,7 @@ struct PostBody {
     user: String,
     text: String,
     state: String,
-    forwards: Vec<ForwardRoute>,
+    forwards: ForwardRoutes,
 }
 
 async fn post_msg(
@@ -725,23 +724,13 @@ async fn post_msg(
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
     tokio::spawn(async move {
         let auth_state = serde_json::from_str::<AuthState>(&decrypt(&msg_body.state)).unwrap();
-        let route = msg_body
-            .forwards
-            .into_iter()
-            .fold((None, None), |mut accum, f| {
-                if accum.0.is_none() && f.route.eq("action") {
-                    accum.0 = Some(f.value);
-                } else if accum.1.is_none() && f.route.eq("repo") {
-                    accum.1 = Some(f.value);
-                }
-                accum
-            });
 
-        if route.0.is_some() && route.1.is_some() {
+        let fwds = msg_body.forwards;
+        if fwds.action.len() == 1 && fwds.repo.len() == 1 {
             if let Ok(repo_name) =
-                get_repo_namewithowner(&route.1.unwrap(), &auth_state.access_token).await
+                get_repo_namewithowner(&fwds.repo[0].value, &auth_state.access_token).await
             {
-                match route.0.unwrap().as_str() {
+                match fwds.action[0].value.as_str() {
                     "create-issue" => {
                         _ = HTTP_CLIENT
                             .post(format!("https://api.github.com/repos/{}/issues", repo_name))
