@@ -300,7 +300,6 @@ async fn capture_event(
 async fn capture_event_inner(event: Event, ge: GithubEvent) {
     if let Ok(auth_state) = get_author_token_from_reactor(&event.connector).await {
         let mut payload: Value = serde_json::from_str(&event.payload).unwrap();
-        // println!("{}", serde_json::to_string_pretty(&payload).unwrap());
         let auth_state = serde_json::from_str::<AuthState>(&auth_state).unwrap();
         if let Ok(github_user) = get_github_user(
             payload["sender"]["url"].as_str().unwrap(),
@@ -309,8 +308,10 @@ async fn capture_event_inner(event: Event, ge: GithubEvent) {
         .await
         {
             if let Some(email) = github_user.email {
-                let obj = payload.as_object_mut().unwrap();
-                obj.insert("sender_email".to_string(), email.into());
+                // Because email is fetched by payload["sender"]["url"]
+                // so payload["sender"] must be an object
+                let sender = payload["sender"].as_object_mut().unwrap();
+                sender.insert("email".to_string(), email.into());
             }
             let triggers = serde_json::json!({
                 "events": ge.0,
