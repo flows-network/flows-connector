@@ -109,7 +109,6 @@ async fn post_msg(Json(pb): Json<PostBody>) -> impl IntoResponse {
         if mbs.is_empty() {
             return (StatusCode::BAD_REQUEST, String::from(""));
         }
-
         for mut mb in mbs {
             mb.as_object_mut().and_then(|obj| {
                 Some(obj.entry("from").or_insert(json!({

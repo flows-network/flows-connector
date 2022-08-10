@@ -6,18 +6,24 @@ use axum::{
     Router,
 };
 use lazy_static::lazy_static;
-use openssl::rsa::{Padding, Rsa};
+use rand::SeedableRng;
 use rand::{distributions::Alphanumeric, Rng};
+use rand_chacha::ChaCha8Rng;
 use reqwest::{Client, ClientBuilder};
+use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::collections::HashMap;
-use std::env;
-use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::{
+    collections::HashMap,
+    env,
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::{Duration, Instant},
+};
 
 const TIMEOUT: u64 = 120;
+
+const RSA_BITS: usize = 2048;
 
 const STATE_MAP_MAX: usize = 100;
 const STATE_BLOCK_EXPIRE_SEC: u64 = 10 * 60;
@@ -33,12 +39,15 @@ lazy_static! {
         .expect("Env variable TWITTER_OAUTH_CLIENT_SECRET not set");
     static ref TWITTER_OAUTH_REDIRECT_URL: String = env::var("TWITTER_OAUTH_REDIRECT_URL")
         .expect("Env variable TWITTER_OAUTH_REDIRECT_URL not set");
-    static ref PASSPHRASE: String =
-        env::var("PASSPHRASE").expect("Env variable PASSPHRASE not set");
-    static ref PUBLIC_KEY_PEM: String =
-        env::var("PUBLIC_KEY_PEM").expect("Env variable PUBLIC_KEY_PEM not set");
-    static ref PRIVATE_KEY_PEM: String =
-        env::var("PRIVATE_KEY_PEM").expect("Env variable PRIVATE_KEY_PEM not set");
+    static ref RSA_RAND_SEED: [u8; 32] = env::var("RSA_RAND_SEED")
+        .expect("Env variable RSA_RAND_SEED not set")
+        .as_bytes()
+        .try_into()
+        .unwrap();
+    static ref CHACHA8RNG: ChaCha8Rng = ChaCha8Rng::from_seed(*RSA_RAND_SEED);
+    static ref PRIVATE_KEY: RsaPrivateKey =
+        RsaPrivateKey::new(&mut CHACHA8RNG.clone(), RSA_BITS).expect("failed to generate a key");
+    static ref PUBLIC_KEY: RsaPublicKey = RsaPublicKey::from(&*PRIVATE_KEY);
     static ref STATE_MAP: Arc<Mutex<HashMap<String, StateBlock>>> =
         Arc::new(Mutex::new(HashMap::new()));
     static ref HTTP_CLIENT: Client = ClientBuilder::new()
@@ -50,22 +59,27 @@ lazy_static! {
 static CONNECT_HTML: &str = include_str!("./connect.html");
 
 fn encrypt(data: &str) -> String {
-    let rsa = Rsa::public_key_from_pem(PUBLIC_KEY_PEM.as_bytes()).unwrap();
-    let mut buf: Vec<u8> = vec![0; rsa.size() as usize];
-    rsa.public_encrypt(data.as_bytes(), &mut buf, Padding::PKCS1)
-        .unwrap();
-    hex::encode(buf)
+    hex::encode(
+        PUBLIC_KEY
+            .encrypt(
+                &mut CHACHA8RNG.clone(),
+                PaddingScheme::new_pkcs1v15_encrypt(),
+                data.as_bytes(),
+            )
+            .expect("failed to encrypt"),
+    )
 }
 
-fn decrypt(hex: &str) -> String {
-    let rsa =
-        Rsa::private_key_from_pem_passphrase(PRIVATE_KEY_PEM.as_bytes(), PASSPHRASE.as_bytes())
-            .unwrap();
-    let mut buf: Vec<u8> = vec![0; rsa.size() as usize];
-    let l = rsa
-        .private_decrypt(&hex::decode(hex).unwrap(), &mut buf, Padding::PKCS1)
-        .unwrap();
-    String::from_utf8(buf[..l].to_vec()).unwrap()
+fn decrypt(data: &str) -> String {
+    String::from_utf8(
+        PRIVATE_KEY
+            .decrypt(
+                PaddingScheme::new_pkcs1v15_encrypt(),
+                &hex::decode(data).unwrap(),
+            )
+            .expect("failed to decrypt"),
+    )
+    .unwrap()
 }
 
 struct StateBlock {
@@ -155,12 +169,12 @@ async fn auth(Query(auth_body): Query<AuthBody>) -> impl IntoResponse {
     } else {
         match get_access_token(&code.unwrap()).await {
             Ok(at) => match get_authed_user(&at.access_token).await {
-                Ok(gu) => {
+                Ok(person) => {
                     let location = format!(
                         "{}/api/connected?authorId={}&authorName={}&authorState={}&refreshState={}",
                         REACTOR_API_PREFIX.as_str(),
-                        gu.0,
-                        gu.1,
+                        person.id,
+                        urlencoding::encode(&person.name),
                         encrypt(&at.access_token),
                         encrypt(&at.refresh_token)
                     );
@@ -189,12 +203,12 @@ async fn auth(Query(auth_body): Query<AuthBody>) -> impl IntoResponse {
 }
 
 #[derive(Serialize, Deserialize)]
-struct OAuthBody {
+struct TokenBody {
     access_token: String,
     refresh_token: String,
 }
 
-async fn get_access_token(code: &str) -> Result<OAuthBody, String> {
+async fn get_access_token(code: &str) -> Result<TokenBody, String> {
     let params = [
         ("grant_type", "authorization_code"),
         ("code", &code),
@@ -202,21 +216,18 @@ async fn get_access_token(code: &str) -> Result<OAuthBody, String> {
         ("code_verifier", "challenge"),
     ];
 
-    let basic_auth = base64::encode(format!(
-        "{}:{}",
-        TWITTER_OAUTH_CLIENT_ID.as_str(),
-        TWITTER_OAUTH_CLIENT_SECRET.as_str()
-    ));
-
     let response = HTTP_CLIENT
         .post("https://api.twitter.com/2/oauth2/token")
-        .header("Authorization", format!("Basic {}", basic_auth))
+        .basic_auth(
+            &*TWITTER_OAUTH_CLIENT_ID,
+            Some(&*TWITTER_OAUTH_CLIENT_SECRET),
+        )
         .form(&params)
         .send()
         .await;
     match response {
         Ok(r) => {
-            let oauth_body = r.json::<OAuthBody>().await;
+            let oauth_body = r.json::<TokenBody>().await;
             match oauth_body {
                 Ok(at) => Ok(at),
                 Err(_) => Err("Failed to get access token".to_string()),
@@ -226,7 +237,12 @@ async fn get_access_token(code: &str) -> Result<OAuthBody, String> {
     }
 }
 
-async fn get_authed_user(access_token: &str) -> Result<(String, String), String> {
+struct Person {
+    id: String,
+    name: String,
+}
+
+async fn get_authed_user(access_token: &str) -> Result<Person, String> {
     let response = HTTP_CLIENT
         .get("https://api.twitter.com/2/users/me")
         .bearer_auth(access_token)
@@ -237,9 +253,9 @@ async fn get_authed_user(access_token: &str) -> Result<(String, String), String>
         Ok(res) => match res.text().await {
             Ok(body) => {
                 if let Ok(v) = serde_json::from_str::<Value>(&body) {
-                    let user_id = v["data"]["id"].as_str().unwrap().to_string();
-                    let user_name = v["data"]["name"].as_str().unwrap().to_string();
-                    Ok((user_id, user_name))
+                    let id = v["data"]["id"].as_str().unwrap().to_string();
+                    let name = v["data"]["name"].as_str().unwrap().to_string();
+                    Ok(Person { id, name })
                 } else {
                     Err("Failed to get user's name".to_string())
                 }
@@ -277,32 +293,37 @@ struct PostBody {
 }
 
 async fn post_msg(Json(msg_body): Json<PostBody>) -> impl IntoResponse {
-    tokio::spawn(async move {
-        let route = msg_body.forwards.into_iter().fold(None, |mut accum, f| {
-            if accum.is_none() && f.route.eq("action") {
-                accum = Some(f.value);
-            }
-            accum
-        });
+    let routes = msg_body
+        .forwards
+        .iter()
+        .map(|route| (route.route.clone(), route.value.clone()))
+        .collect::<HashMap<String, String>>();
 
-        if route.is_some() {
-            match route.unwrap().as_str() {
-                "create-tweet" => {
-                    _ = HTTP_CLIENT
-                        .post("https://api.twitter.com/2/tweets")
-                        .bearer_auth(decrypt(&msg_body.state))
-                        .json(&serde_json::json!({
-                            "text": msg_body.text
-                        }))
-                        .send()
-                        .await;
-                }
-                _ => (),
+    let action = if let Some(a) = routes.get("action") {
+        a
+    } else {
+        return Err((StatusCode::BAD_REQUEST, "Missing action"));
+    };
+
+    match action.as_str() {
+        "create-tweet" => {
+            let resp = HTTP_CLIENT
+                .post("https://api.twitter.com/2/tweets")
+                .bearer_auth(decrypt(&msg_body.state))
+                .json(&serde_json::json!({
+                    "text": msg_body.text
+                }))
+                .send()
+                .await;
+
+            if resp.is_ok() {
+                Ok((StatusCode::FOUND, "Ok"))
+            } else {
+                Err((StatusCode::INTERNAL_SERVER_ERROR, "Create tweet failed"))
             }
         }
-    });
-
-    StatusCode::OK
+        _ => Err((StatusCode::BAD_REQUEST, "Unsupport action")),
+    }
 }
 
 #[derive(Deserialize)]
@@ -316,39 +337,34 @@ async fn refresh_token(Json(msg_body): Json<RefreshState>) -> impl IntoResponse 
         ("refresh_token", &decrypt(&msg_body.refresh_state)),
     ];
 
-    let basic_auth = base64::encode(format!(
-        "{}:{}",
-        TWITTER_OAUTH_CLIENT_ID.as_str(),
-        TWITTER_OAUTH_CLIENT_SECRET.as_str()
-    ));
-
     let response = HTTP_CLIENT
         .post("https://api.twitter.com/2/oauth2/token")
-        .header("Authorization", format!("Basic {}", basic_auth))
+        .basic_auth(
+            &*TWITTER_OAUTH_CLIENT_ID,
+            Some(&*TWITTER_OAUTH_CLIENT_SECRET),
+        )
         .form(&params)
         .send()
         .await;
-    match response {
-        Ok(r) => {
-            let oauth_body = r.json::<OAuthBody>().await;
-            match oauth_body {
-                Ok(at) => {
-                    let encrypted = serde_json::json!({
-                        "access_state": encrypt(&at.access_token),
-                        "refresh_state": encrypt(&at.refresh_token)
-                    });
-                    Ok((StatusCode::OK, serde_json::to_string(&encrypted).unwrap()))
-                }
-                Err(_) => Err((
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    "Failed to get access token".to_string(),
-                )),
-            }
+
+    if let Ok(r) = response {
+        if let Ok(at) = r.json::<TokenBody>().await {
+            let encrypted = serde_json::json!({
+                "access_state": encrypt(&at.access_token),
+                "refresh_state": encrypt(&at.refresh_token)
+            });
+            Ok((StatusCode::OK, serde_json::to_string(&encrypted).unwrap()))
+        } else {
+            Err((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to get access token".to_string(),
+            ))
         }
-        Err(_) => Err((
+    } else {
+        Err((
             StatusCode::INTERNAL_SERVER_ERROR,
             "Failed to get access token".to_string(),
-        )),
+        ))
     }
 }
 

@@ -5,5 +5,7 @@ members = [
 	"slack", "slack/wasm",
 	"sendgrid", "sendgrid/wasm",
 	"twitter",
-	"gmail"
+	"gmail",
+	"gitlab",
+	"discord"
 ]

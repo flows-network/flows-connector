@@ -13,6 +13,7 @@ use serde_json::Value;
 use std::env;
 use std::net::SocketAddr;
 use std::time::Duration;
+use urlencoding::encode;
 
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
@@ -99,7 +100,7 @@ async fn auth(Query(auth_body): Query<AuthBody>) -> impl IntoResponse {
                                 "{}/api/connected?authorId={}&authorName={}&authorState={}",
                                 REACTOR_API_PREFIX.as_str(),
                                 authed_user.id,
-                                gu,
+                                encode(gu.as_str()),
                                 encrypt(at.access_token.unwrap().as_str())
                             );
                             Ok((StatusCode::FOUND, [("Location", location)]))
@@ -221,8 +222,7 @@ async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, cha
             "user": user,
             "text": text,
             "triggers": {
-                "channels": channel,
-                "event": "get message"
+                "channels": channel
             }
         });
 
@@ -236,7 +236,7 @@ async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, cha
         let mut request = multipart::Form::new()
             .text("user", user)
             .text("text", text)
-            .text("triggers", format!(r#"{{"channels": "{}", "event": "get message"}}"#, channel));
+            .text("triggers", format!(r#"{{"channels": "{}"}}"#, channel));
 
         for f in files.into_iter() {
             if let Ok(b) = get_file(&access_token, &f.url_private).await {
