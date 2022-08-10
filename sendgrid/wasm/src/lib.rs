@@ -3,7 +3,7 @@ use wasmedge_bindgen::*;
 use wasmedge_bindgen_macro::*;
 use wasmhaiku_glue::{async_request, RequestMethod};
 
-use std::{collections::HashMap, env};
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -139,7 +139,7 @@ struct PostBody {
     state: String,
 }
 
-#[wasmedge_bindgen]
+// #[wasmedge_bindgen]
 pub fn post(_: String, _: String, body: Vec<u8>) -> (u16, String, Vec<u8>) {
     let pb: PostBody = match serde_json::from_slice(&body) {
         Ok(b) => b,
@@ -148,29 +148,79 @@ pub fn post(_: String, _: String, body: Vec<u8>) -> (u16, String, Vec<u8>) {
         }
     };
 
-    return match serde_json::from_str::<MailBody>(&pb.text) {
-        Ok(mb) => {
+    if let Ok(mb) = serde_json::from_str::<MailBody>(&pb.text) {
+        let req_body = serde_json::json!({
+            "personalizations": [
+                {
+                    "to": [
+                        {
+                            "email": mb.to_email
+                        }
+                    ]
+                }
+            ],
+            "from": {
+                "email": pb.user
+            },
+            "subject": mb.subject,
+            "content": [
+                {
+                    "type": "text/html",
+                    "value": mb.content
+                }
+            ]
+        });
+        let req_body = serde_json::to_vec(&req_body).unwrap();
+
+        let mut headers = HashMap::new();
+        headers.insert("Authorization", format!("Bearer {}", decrypt(&pb.state)));
+        headers.insert("Content-Type", String::from("application/json"));
+
+        match async_request(
+            String::from("https://api.sendgrid.com/v3/mail/send"),
+            RequestMethod::POST,
+            headers,
+            req_body,
+        ) {
+            Ok(_) => (200, String::new(), vec![]),
+            Err(e) => (500, String::new(), e.as_bytes().to_vec()),
+        }
+    } else if let Ok(mbs) = serde_json::from_str::<Vec<MailBody>>(&pb.text) {
+        if mbs.is_empty() {
+            return (400, String::new(), b"Invalid mail body".to_vec());
+        }
+
+        let mut emails: HashMap<String, Vec<(String, String)>> = HashMap::new();
+        for mb in mbs {
+            let subject = mb.subject;
+            let to_email = mb.to_email;
+            emails
+                .entry(mb.content)
+                .or_insert(vec![(subject.clone(), to_email.clone())])
+                .push((subject, to_email));
+        }
+
+        for (content, ens) in emails {
+            let personalizations: Vec<_> = ens
+                .into_iter()
+                .map(|(subject, to_email)| {
+                    serde_json::json!({
+                        "to": to_email,
+                        "subject": subject,
+                    })
+                })
+                .collect();
             let req_body = serde_json::json!({
-                "personalizations": [
-                    {
-                        "to": [
-                            {
-                                "email": mb.to_email
-                            }
-                        ]
-                    }
-                ],
                 "from": {
-                    "email": pb.user
+                    "email": pb.user,
                 },
-                "subject": mb.subject,
-                "content": [
-                    {
-                        "type": "text/html",
-                        "value": mb.content
-                    }
-                ]
+                "personalizations": personalizations,
+                "content": [{
+                    "type": "text/html",
+                    "value": content,
+                }]
             });
+
             let req_body = serde_json::to_vec(&req_body).unwrap();
 
             let mut headers = HashMap::new();
@@ -183,10 +233,12 @@ pub fn post(_: String, _: String, body: Vec<u8>) -> (u16, String, Vec<u8>) {
                 headers,
                 req_body,
             ) {
-                Ok(_) => (200, String::new(), vec![]),
-                Err(e) => (500, String::new(), e.as_bytes().to_vec()),
+                Ok(_) => (),
+                Err(e) => return (500, String::new(), e.as_bytes().to_vec()),
             }
         }
-        Err(_) => (400, String::new(), b"Invalid mail body".to_vec()),
-    };
+        (200, String::new(), vec![])
+    } else {
+        (400, String::new(), b"Invalid mail body".to_vec())
+    }
 }
