@@ -306,39 +306,31 @@ async fn get_file(access_token: &str, url_private: &str) -> Result<Vec<u8>, ()> 
     Err(())
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct ForwardRoute {
-    route: String,
-    value: String,
-}
-
 #[derive(Deserialize, Serialize)]
 struct PostBody {
     user: String,
     text: String,
     state: String,
-    forwards: Vec<ForwardRoute>,
+    forwards: HookRoutes,
 }
 
 async fn post_msg(
     Json(msg_body): Json<PostBody>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
     tokio::spawn(async move {
-        for pb in msg_body.forwards.iter() {
-            if pb.route.eq("channels") {
-                let request = serde_json::json!({
-                    "channel": pb.value,
-                    "text": msg_body.text,
-                });
+        for ch in msg_body.forwards.channels.iter() {
+            let request = serde_json::json!({
+                "channel": ch.value,
+                "text": msg_body.text,
+            });
 
-                tokio::spawn(
-                    HTTP_CLIENT
-                        .post("https://slack.com/api/chat.postMessage")
-                        .bearer_auth(decrypt(msg_body.state.as_str()))
-                        .json(&request)
-                        .send(),
-                );
-            }
+            tokio::spawn(
+                HTTP_CLIENT
+                    .post("https://slack.com/api/chat.postMessage")
+                    .bearer_auth(decrypt(msg_body.state.as_str()))
+                    .json(&request)
+                    .send(),
+            );
         }
     });
 
@@ -371,7 +363,7 @@ async fn upload_msg(
         let mut user = String::new();
         let mut text = String::new();
         let mut state = String::new();
-        let mut forwards = Vec::new();
+        let mut forwards = None;
 
         let mut parts = Vec::new();
         while let Some(field) = multipart.next_field().await.unwrap() {
@@ -405,8 +397,8 @@ async fn upload_msg(
                 }
                 "forwards" => {
                     if let Ok(f) = field.text().await {
-                        if let Ok(fws) = serde_json::from_str::<Vec<ForwardRoute>>(&f) {
-                            forwards = fws;
+                        if let Ok(fws) = serde_json::from_str::<HookRoutes>(&f) {
+                            forwards = Some(fws);
                         }
                     }
                 }
@@ -426,12 +418,12 @@ async fn upload_msg(
             }
         }
 
-        if text.len() > 0 {
+        if text.len() > 0 && forwards.is_some() {
             tokio::spawn(post_msg(Json::from(PostBody {
                 user,
                 state,
                 text,
-                forwards,
+                forwards: forwards.unwrap(),
             })));
         }
     });
@@ -551,13 +543,13 @@ async fn route_channels(Json(body): Json<RouteReq>) -> impl IntoResponse {
         Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
     }
 }
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct HookRouteObject {
     // field: String,
     value: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct HookRoutes {
     channels: Vec<HookRouteObject>,
 }
