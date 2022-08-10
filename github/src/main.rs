@@ -314,7 +314,7 @@ async fn capture_event_inner(event: Event, ge: GithubEvent) {
                 sender.insert("email".to_string(), email.into());
             }
             let triggers = serde_json::json!({
-                "events": ge.0,
+                "event": ge.0,
                 "repo": payload["repository"]["node_id"].as_str().unwrap(),
             });
 
