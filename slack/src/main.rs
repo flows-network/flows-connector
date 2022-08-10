@@ -223,7 +223,7 @@ async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, cha
             "text": text,
             "triggers": {
                 "channels": channel,
-                "event": "Message"
+                "event": "message"
             }
         });
 
@@ -239,7 +239,7 @@ async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, cha
             .text("text", text)
             .text(
                 "triggers",
-                format!(r#"{{"channels": "{}", "event": "Message"}}"#, channel),
+                format!(r#"{{"channels": "{}", "event": "message"}}"#, channel),
             );
 
         for f in files.into_iter() {
