@@ -24,33 +24,50 @@
                         Find your Auth Token at <a href="twilio.com/console" target="_blank">Twilio Console</a>
 					</div>
 				</div>
+				<div class="mb-3">
+					<label for="from-phone" class="form-label">Twilio From Phone</label>
+					<input type="text" class="form-control" id="from-phone" name="from_phone" maxlength="100">
+					<div class="form-text">
+                        From specifies the Twilio phone number, short code, or Messaging Service that sends this message.
+                        see: <a href="https://www.twilio.com/docs/sms/send-messages#from" target="_blank">Twilio Docs</a>
+					</div>
+				</div>
 				<button id="submit-btn" type="submit" class="btn btn-primary" disabled="disabled">Connect with Reactor</button>
 			</form>
 		</div>
 		<script>
 			let accountSid = document.querySelector('#account-sid');
 			let authToken = document.querySelector('#auth-token');
+			let fromPhone = document.querySelector('#from-phone');
 			let submitBtn = document.querySelector('#submit-btn');
 
 			let validate = {
-				sev: false,
-				akv: false,
+				asv: false,
+				atv: false,
+                fpv: false,
+
 				set accountSidValid(b) {
-					this.sev = b;
+					this.asv = b;
 					this.check();
 				},
 				set authTokenValid(b) {
-					this.akv = b;
+					this.atv = b;
 					this.check();
 				},
+                set fromPhoneValid(b) {
+                    this.fpv = b;
+                    this.check();
+                },
+
 				check: function() {
-					if (this.sev && this.akv) {
+					if (this.asv && this.atv && this.fpv) {
 						submitBtn.removeAttribute('disabled');
 					} else {
 						submitBtn.setAttribute('disabled', 'disabled');
 					}
 				}
 			}
+
 			accountSid.addEventListener('input', function() {
 				let sid = this.value;
 				if (sid.match(/^AC[a-zA-Z0-9]{32}$/)) {
@@ -67,7 +84,14 @@
 					validate.authTokenValid = false;
 				}
 			});
-
+            fromPhone.addEventListener('input', function() {
+                let phone = this.value;
+                if (phone.match(/^\+\d{4,}$/)) {
+                    validate.fromPhoneValid = true;
+                } else {
+                    validate.fromPhoneValid = false;
+                }
+            });
 		</script>
 	</body>
 </html>
