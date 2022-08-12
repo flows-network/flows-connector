@@ -132,13 +132,8 @@ async fn post_msg(Json(pb): Json<PostBody>) -> impl IntoResponse {
             .send()
             .await;
 
-        dbg!(&response);
-
         match response {
-            Ok(r) => {
-                dbg!(r.text().await.unwrap());
-                (StatusCode::OK, String::from(""))
-            },
+            Ok(_) => (StatusCode::OK, String::from("")),
             Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)),
         }
     } else {
