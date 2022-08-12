@@ -9,4 +9,5 @@ members = [
 	"gitlab",
 	"discord",
 	"cloudniary",
+    "twilio",
 ]
