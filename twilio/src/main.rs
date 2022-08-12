@@ -76,6 +76,13 @@ async fn connect() -> impl IntoResponse {
 struct AuthBody {
     account_sid: String,
     auth_token: String,
+    from_phone: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct AuthState {
+    account_sid: String,
+    auth_token: String,
 }
 
 async fn auth(Form(auth_body): Form<AuthBody>) -> impl IntoResponse {
@@ -92,9 +99,15 @@ async fn auth(Form(auth_body): Form<AuthBody>) -> impl IntoResponse {
     let location = format!(
         "{}/api/connected?authorId={}&authorName={}&authorState={}",
         REACTOR_API_PREFIX.as_str(),
-        auth_body.account_sid,
-        auth_body.account_sid,
-        encrypt(&auth_body.auth_token),
+        auth_body.from_phone,
+        auth_body.from_phone,
+        encrypt(
+            &serde_json::to_string(&AuthState {
+                account_sid: auth_body.account_sid,
+                auth_token: auth_body.auth_token
+            })
+            .unwrap()
+        ),
     );
     return Ok((StatusCode::FOUND, [("Location", location)]));
 }
@@ -109,26 +122,27 @@ struct PostBody {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "PascalCase")]
 struct TwilioParams {
-    from: String,
     body: String,
     to: String,
 }
 
 async fn post_msg(Json(pb): Json<PostBody>) -> impl IntoResponse {
     if let Ok(tp) = serde_json::from_str::<TwilioParams>(&pb.text) {
-        let mut params = HashMap::new();
+        let mut params = HashMap::with_capacity(3);
 
         params.insert("Body", tp.body);
-        params.insert("From", tp.from);
         params.insert("To", tp.to);
+        params.insert("From", pb.user);
+
+        let state = serde_json::from_str::<AuthState>(&decrypt(&pb.state)).unwrap();
 
         let response = HTTP_CLIENT
             .post(format!(
                 "https://api.twilio.com/2010-04-01/Accounts/{}/Messages.json",
-                pb.user
+                state.account_sid
             ))
             .form(&params)
-            .basic_auth(pb.user, Some(decrypt(&pb.state)))
+            .basic_auth(state.account_sid, Some(state.auth_token))
             .send()
             .await;
 
