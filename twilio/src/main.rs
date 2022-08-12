@@ -16,6 +16,8 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 
+use urlencoding::encode;
+
 const RSA_BITS: usize = 2048;
 
 const TIMEOUT: u64 = 120;
@@ -99,8 +101,8 @@ async fn auth(Form(auth_body): Form<AuthBody>) -> impl IntoResponse {
     let location = format!(
         "{}/api/connected?authorId={}&authorName={}&authorState={}",
         REACTOR_API_PREFIX.as_str(),
-        auth_body.from_phone,
-        auth_body.from_phone,
+        encode(&auth_body.from_phone),
+        encode(&auth_body.from_phone),
         encrypt(
             &serde_json::to_string(&AuthState {
                 account_sid: auth_body.account_sid,
