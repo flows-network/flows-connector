@@ -4,28 +4,29 @@ use axum::{
     response::IntoResponse,
     routing::{get, post},
     Router};
-use axum_server::tls_rustls::RustlsConfig;
 use lazy_static::lazy_static;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rsa::{RsaPrivateKey, RsaPublicKey, PaddingScheme, PublicKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{env, net::SocketAddr, collections::HashMap};
+use std::{env, net::SocketAddr};
 use reqwest::{Client, header};
 
 const RSA_BITS: usize = 2048;
 
 lazy_static! {
-    static ref REACTOR_API_PREFIX: String =
-        env::var("REACTOR_API_PREFIX").expect("Env variable REACTOR_API_PREFIX not set");
-    static ref NOTION_APP_REDIRECT_URL: String =
-        env::var("NOTION_APP_REDIRECT_URL").expect("Env variable NOTION_APP_REDIRECT_URL not set");
+    static ref HAIKU_API_PREFIX: String =
+        env::var("HAIKU_API_PREFIX").expect("Env variable HAIKU_API_PREFIX not set");
+    static ref SERVICE_API_PREFIX: String =
+        env::var("SERVICE_API_PREFIX").expect("Env variable SERVICE_API_PREFIX not set");
+    
     static ref NOTION_APP_CLIENT_ID: String =
         env::var("NOTION_APP_CLIENT_ID").expect("Env variable NOTION_APP_CLIENT_ID not set");
     static ref NOTION_APP_CLIENT_SECRET: String = env::var("NOTION_APP_CLIENT_SECRET")
         .expect("Env variable NOTION_APP_CLIENT_SECRET not set");
 
+    static ref REDIRECT_URL: String = format!("{}/auth", *SERVICE_API_PREFIX);
     static ref RSA_RAND_SEED: [u8; 32] = env::var("RSA_RAND_SEED")
         .expect("Env variable RSA_RAND_SEED not set")
         .as_bytes()
@@ -63,6 +64,14 @@ fn decrypt(data: &str) -> String {
     .unwrap()
 }
 
+async fn connect() -> impl IntoResponse {
+    (StatusCode::FOUND, [("Location", format!(
+        "https://api.notion.com/v1/oauth/authorize?owner=user&client_id={}&redirect_uri={}&response_type=code",
+        *NOTION_APP_CLIENT_ID,
+        urlencoding::encode(&*REDIRECT_URL)))]
+    )
+}
+
 #[derive(Deserialize)]
 struct AuthBody {
     code: String,       // Temporary authorization code
@@ -74,20 +83,18 @@ async fn auth(auth_body: Query<AuthBody>) -> impl IntoResponse {
         return Err((StatusCode::BAD_REQUEST, "No code".to_string()));
     }
 
-    match get_access_token(&auth_body.code).await {
-        Ok(at) => {
-            let location = format!(
-                "{}/api/connected?authorId={}&authorName={}&authorState={}",
-                REACTOR_API_PREFIX.as_str(),
-                at.workspace_id,
-                urlencoding::encode(&at.workspace_name
-                    .unwrap_or_else(|| "Unknown workspace name".to_string())),
-                encrypt(&at.access_token),
-            );
-            Ok((StatusCode::FOUND, [("Location", location)]))
-        }
-        Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR, e)),
-    }
+    let at = get_access_token(&auth_body.code).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let location = format!(
+        "{}/api/connected?authorId={}&authorName={}&authorState={}",
+        HAIKU_API_PREFIX.as_str(),
+        at.workspace_id,
+        urlencoding::encode(&at.workspace_name
+            .unwrap_or_else(|| "Unknown workspace name".to_string())),
+        encrypt(&at.access_token),
+    );
+    Ok((StatusCode::FOUND, [("Location", location)]))
 }
 
 #[derive(Deserialize)]
@@ -101,33 +108,20 @@ async fn get_access_token(code: &str) -> Result<AccessTokenBody, String> {
     let body = json!({
         "grant_type": "authorization_code",
         "code": code,
-        "redirect_uri": NOTION_APP_REDIRECT_URL.as_str(),
+        "redirect_uri": &*REDIRECT_URL,
     });
 
-    let response = HTTP_CLIENT
+    let resp = HTTP_CLIENT
         .post("https://api.notion.com/v1/oauth/token")
         .header(header::USER_AGENT, "Github Connector of Second State Reactor")
         .header(header::CONTENT_TYPE, "application/json")
         .basic_auth(&*NOTION_APP_CLIENT_ID, Some(&*NOTION_APP_CLIENT_SECRET))
         .json(&body)
         .send()
-        .await;
+        .await
+        .map_err(|e| e.to_string())?;
 
-    match response {
-        Ok(resp) => {
-            match resp.json::<AccessTokenBody>().await {
-                Ok(at) => Ok(at),
-                Err(e) => Err(e.to_string()),
-            }
-        },
-        Err(e) => Err(e.to_string()),
-    }
-}
-
-#[derive(Deserialize)]
-struct ForwardRoute {
-    route: String,
-    value: String,
+    Ok(resp.json::<AccessTokenBody>().await.map_err(|e| e.to_string())?)
 }
 
 #[derive(Deserialize)]
@@ -136,7 +130,8 @@ struct ReactorReqBody {
     state: String,
     text: Option<String>,
     cursor: Option<String>,
-    forwards: Option<Vec<ForwardRoute>>,
+    routes: Option<Value>,
+    forwards: Option<DatabaseRoute>,
 }
 
 #[derive(Deserialize)]
@@ -157,7 +152,7 @@ struct DatabaseList {
 }
 
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct RouteItem {
     field: String,
     value: String,
@@ -173,7 +168,7 @@ struct RouteList {
 async fn databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
     let mut body = json!({
         "filter": {
-            "value": "2022-06-28",
+            "value": "database",
             "property": "object",
         },
         "page_size": 10,
@@ -195,13 +190,9 @@ async fn databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
         .await;
 
     let list = match response {
-        Ok(resp) => {
-            match resp.json::<DatabaseList>().await {
-                Ok(list) => list,
-                Err(e) => { return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())) },
-            }
-        },
-        Err(e) => { return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())) },
+        Ok(resp) => resp.json::<DatabaseList>().await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?,
+        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR, e.to_string())),
     };
 
     let mut ret = RouteList { cursor: None, list: Vec::new() };
@@ -211,7 +202,64 @@ async fn databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
     }
 
     for item in list.results {
-        ret.list.push(RouteItem { field: item.title[0].plain_text.clone(), value: item.id });
+        ret.list.push(RouteItem {
+            field: item.title.first().unwrap_or(
+                &TitleItem { plain_text: item.id.clone() }).plain_text.clone(),
+            value: item.id
+        });
+    }
+
+    Ok((StatusCode::OK, Json(ret)))
+}
+
+#[derive(Deserialize)]
+struct Database {
+    properties: Value,
+}
+
+#[derive(Deserialize)]
+struct DatabaseRoute {
+    databases: Vec<RouteItem>,
+    properties: Option<Vec<RouteItem>>
+}
+
+// ref https://developers.notion.com/reference/retrieve-a-database
+async fn properties(req: Json<ReactorReqBody>) -> impl IntoResponse {
+    let database_id = if let Some(routes) = &req.routes {
+        serde_json::from_value::<DatabaseRoute>(routes.clone())
+            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
+            .databases.first()
+            .ok_or((StatusCode::BAD_REQUEST, "Missing databases routes".to_string()))?
+            .value.clone()
+    } else {
+        return Err((StatusCode::BAD_REQUEST, "Missing routes".to_string()));
+    };
+    
+    let database = HTTP_CLIENT
+        .get(format!("https://api.notion.com/v1/databases/{}", database_id))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::USER_AGENT, "Github Connector of Second State Reactor")
+        .header("Notion-Version", "2022-06-28")
+        .bearer_auth(decrypt(&req.state))
+        .send()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+    
+        .json::<Database>()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Parse database object failed: {}", e.to_string())))?;
+
+    let properties = match database.properties {
+        Value::Object(p) => p,
+        _ => return Err((StatusCode::INTERNAL_SERVER_ERROR,
+            "Parse properties failed".to_string())),
+    };
+
+    let mut ret = RouteList { cursor: None, list: Vec::new() };
+
+    for (name, _) in properties {
+        ret.list.push(RouteItem { field: name.clone(), value: name });
     }
 
     Ok((StatusCode::OK, Json(ret)))
@@ -220,30 +268,22 @@ async fn databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
 // ref https://developers.notion.com/docs/working-with-databases
 //     https://developers.notion.com/reference/post-page
 async fn post_msg(req: Json<ReactorReqBody>) -> impl IntoResponse {
-    let routes = if let Some(f) = &req.forwards {
-        f.iter().map(|route| { (route.route.clone(), route.value.clone()) })
-            .collect::<HashMap<String, String>>()
-    } else {
-        return Err((StatusCode::BAD_REQUEST, "Invalid JSON data: Missing forwards".to_string()));
-    };
+    let forwards = req.forwards.as_ref()
+        .ok_or((StatusCode::BAD_REQUEST,
+            "Invalid JSON data: Missing forwards".to_string()))?;
 
-    let database_id = if let Some(id) = routes.get("database") {
-        id
-    } else {
-        return Err((StatusCode::BAD_REQUEST, "Invalid JSON data: Missing database".to_string()));
-    };
+    let database_id = &forwards.databases.first()
+        .ok_or((StatusCode::BAD_REQUEST, "Invalid JSON data: Missing database".to_string()))?
+        .value;
 
-    let property = if let Some(p) = routes.get("property") {
-        p
-    } else {
-        return Err((StatusCode::BAD_REQUEST, "Invalid JSON data: Missing property".to_string()));
-    };
+    let property = &forwards.properties.as_ref()
+        .ok_or((StatusCode::BAD_REQUEST, "Missing properties".to_string()))?
+        .first()
+        .ok_or((StatusCode::BAD_REQUEST, "Missing properties forwards item".to_string()))?
+        .value;
 
-    let text = if let Some(t) = &req.text {
-        t
-    } else {
-        return Err((StatusCode::BAD_REQUEST, "Missing text".to_string()));
-    };
+    let text = req.text.as_ref()
+        .ok_or((StatusCode::BAD_REQUEST, "Missing text".to_string()))?;
 
     // ref https://developers.notion.com/docs/working-with-databases#adding-pages-to-a-database
     let body = json!({
@@ -275,68 +315,10 @@ async fn post_msg(req: Json<ReactorReqBody>) -> impl IntoResponse {
         .await;
 
     match response {
-        Ok(_) => Ok((StatusCode::OK, "Ok.".to_string())),
+        Ok(r) => Ok((StatusCode::OK, r.bytes().await.unwrap_or_default().to_vec())),
         Err(e) => Err((StatusCode::INTERNAL_SERVER_ERROR,
             format!("Post database item failed: {}.", e.to_string()))),
     }
-}
-
-#[derive(Deserialize)]
-struct Database {
-    properties: Value,
-}
-
-// ref https://developers.notion.com/reference/retrieve-a-database
-async fn properties(req: Json<ReactorReqBody>) -> impl IntoResponse {
-    let database_id = if let Some(forwards) = &req.forwards {
-        if let Some(route) = forwards.first() {
-            if route.route.eq("database") {
-                route.value.clone()
-            } else {
-                return Err((StatusCode::BAD_REQUEST, "Invalid JSON data: Missing database".to_string()));
-            }
-        } else {
-            return Err((StatusCode::BAD_REQUEST, "Invalid JSON data: Missing database".to_string()));
-        }
-    } else {
-        return Err((StatusCode::BAD_REQUEST, "Invalid JSON data: Missing forwards".to_string()));
-    };
-    
-    let response = HTTP_CLIENT
-        .get(format!("https://api.notion.com/v1/databases/{}", database_id))
-        .header(header::CONTENT_TYPE, "application/json")
-        .header(header::USER_AGENT, "Github Connector of Second State Reactor")
-        .header("Notion-Version", "2022-06-28")
-        .bearer_auth(decrypt(&req.state))
-        .send()
-        .await;
-
-    let properties = match response {
-        Ok(resp) => {
-            match resp.json::<Database>().await {
-                Ok(db) => {
-                    if let Value::Object(p) = db.properties {
-                        p
-                    } else {
-                        return Err((StatusCode::INTERNAL_SERVER_ERROR,
-                            "Parse properties failed".to_string()));
-                    }
-                },
-                Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("Parse database object failed: {}", e.to_string()))),
-            }
-        },
-        Err(e) => return Err((StatusCode::INTERNAL_SERVER_ERROR,
-            format!("Get database failed: {}", e.to_string()))),
-    };
-
-    let mut ret = RouteList { cursor: None, list: Vec::new() };
-
-    for (name, _) in properties {
-        ret.list.push(RouteItem { field: name.clone(), value: name });
-    }
-
-    Ok((StatusCode::OK, Json(ret)))
 }
 
 #[tokio::main]
@@ -345,19 +327,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse::<u16>()?;
 
     let app = Router::new()
+        .route("/connect", get(connect))
         .route("/auth", get(auth))
         .route("/databases", post(databases))
-        .route("/post-msg", post(post_msg))
+        .route("/post", post(post_msg))
         .route("/properties", post(properties));
 
-    let config = RustlsConfig::from_pem_file(
-            "./cert.pem",
-            "./key.pem",
-    )
-    .await
-    .expect("Can not found certificate(./cert.pem) and private key(./key.pem).");
-
-    axum_server::bind_rustls(SocketAddr::from(([127, 0, 0, 1], port)), config)
+    axum::Server::bind(&SocketAddr::from(([127, 0, 0, 1], port)))
         .serve(app.into_make_service())
         .await?;
 
