@@ -646,7 +646,6 @@ async fn hook_events() -> impl IntoResponse {
         "Status" => "status",
         "Team" => "team",
         "Team Add" => "team_add",
-        "Watch" => "watch",
         "Workflow Dispatch" => "workflow_dispatch",
         "Workflow Job" => "workflow_job",
         "Workflow Run" => "workflow_run",
