@@ -577,11 +577,11 @@ struct RouteReq {
 
 #[derive(Debug, Deserialize, Serialize)]
 struct _Event {
-    #[serde(rename = "GitHub Event")]
+    #[serde(rename(deserialize = "GitHub Event"))]
     value: String,
-    #[serde(rename = "Event Title on WasmHaiku")]
+    #[serde(rename(deserialize = "Event Title on WasmHaiku"))]
     field: String,
-    #[serde(rename = "Description")]
+    #[serde(rename(deserialize = "Description"))]
     desc: String,
 }
 
@@ -599,7 +599,9 @@ lazy_static! {
 }
 
 async fn hook_events() -> impl IntoResponse {
-    Json(&*EVENTS)
+    Json(json!({
+        "list": &*EVENTS
+    }))
 }
 
 async fn repos(Json(body): Json<RouteReq>) -> impl IntoResponse {
