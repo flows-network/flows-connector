@@ -30,7 +30,7 @@
 		let apiKey, apiSecret, cloudName;
 
 		apiEnv.addEventListener('input', function () {
-			let result = this.value.match(/cloudinary:\/\/(\d+):(\w+)@(\w+)/);
+			let result = this.value.match(/cloudinary:\/\/(\d+):(\w+)@([\w-]+)/);
 			if (result) {
 				submitBtn.removeAttribute('disabled');
 
