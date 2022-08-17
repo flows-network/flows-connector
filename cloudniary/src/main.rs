@@ -123,8 +123,7 @@ async fn upload(
                     .content_type()
                     .ok_or((StatusCode::BAD_REQUEST, "Missing content type".to_string()))?;
 
-                let t = t.split_once("/")
-                    .map_or_else(|| t, |t| t.0);
+                let t = t.split_once("/").map_or_else(|| t, |t| t.0);
 
                 file_type = match t {
                     "image" | "video" | "raw" => Some(t.to_string()),
@@ -210,18 +209,6 @@ async fn upload_file_to_cloudinary(
         .map_err(|e| e.to_string())
 }
 
-async fn actions() -> impl IntoResponse {
-    let events = serde_json::json!({
-        "list": [
-            {
-                "field": "Upload",
-                "value": "upload"
-            }
-        ]
-    });
-    Json(events)
-}
-
 #[derive(Deserialize)]
 struct Notification {
     notification_type: String,
@@ -259,7 +246,7 @@ async fn capture_event_inner(req: Notification) -> Result<(), String> {
                 "user": cloud_name,
                 "text": secure_url,
                 "triggers": {
-                    "action": "upload"
+                    "event": "file_uploaded"
                 }
             });
 
@@ -294,7 +281,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/connect", get(connect))
         .route("/auth", get(auth))
         .route("/post", put(upload))
-        .route("/actions", post(actions))
         .route("/webhook", post(capture_event));
 
     axum::Server::bind(&SocketAddr::from(([127, 0, 0, 1], port)))
