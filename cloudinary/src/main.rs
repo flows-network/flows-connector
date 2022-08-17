@@ -234,7 +234,7 @@ async fn capture_event_inner(req: Notification) -> Result<(), String> {
         "upload" => {
             let secure_url = req.secure_url.ok_or("Missing secure url".to_string())?;
 
-            let reg = Regex::new("res.cloudinary.com/(\\w+)/").unwrap();
+            let reg = Regex::new("res.cloudinary.com/([\\w-]+)/").unwrap();
             let cloud_name = reg
                 .captures(&secure_url)
                 .ok_or("Invaild secure url".to_string())?
