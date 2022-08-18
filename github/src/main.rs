@@ -657,6 +657,14 @@ async fn actions() -> impl IntoResponse {
                 "field": "Create Issue Comment",
                 "value": "create-issue-comment",
             },
+            {
+                "field": "Add labels to an issue",
+                "value": "add-labels",
+            },
+            {
+                "field": "Add assignees to an issue",
+                "value": "add-assignees",
+            },
         ],
     });
     Json(events)
