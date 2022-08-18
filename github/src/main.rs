@@ -1,3 +1,5 @@
+#![recursion_limit = "256"]
+
 use axum::{
     extract::{Form, Json, Query},
     http::{header, StatusCode},
