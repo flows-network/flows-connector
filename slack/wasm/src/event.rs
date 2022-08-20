@@ -20,7 +20,7 @@ struct EventBody {
 #[derive(Debug, Deserialize)]
 struct Event {
     bot_id: Option<String>,
-    client_msg_id: Option<String>,
+    // client_msg_id: Option<String>,
     channel: Option<String>,
     // channel_type: Option<String>,
     user: Option<String>,

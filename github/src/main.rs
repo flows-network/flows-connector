@@ -3,8 +3,10 @@ use axum::{
     http::{header, StatusCode},
     response::IntoResponse,
     routing::{delete, get, post},
-    Router,
+    Router, TypedHeader,
 };
+use headers::HeaderName;
+use headers::{Header as IHeader, HeaderValue};
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use lazy_static::lazy_static;
 use reqwest::{Client, ClientBuilder};
@@ -262,12 +264,40 @@ struct Event {
     payload: String,
 }
 
-async fn capture_event(Form(event): Form<Event>) -> impl IntoResponse {
-    tokio::spawn(capture_event_inner(event));
+struct GithubEvent(String);
+
+// header name must be lowercase
+static HN: HeaderName = HeaderName::from_static("x-github-event");
+
+impl IHeader for GithubEvent {
+    fn name() -> &'static HeaderName {
+        &HN
+    }
+
+    fn decode<'i, I>(values: &mut I) -> Result<Self, headers::Error>
+    where
+        Self: Sized,
+        I: Iterator<Item = &'i headers::HeaderValue>,
+    {
+        let value = values.next().ok_or_else(headers::Error::invalid)?;
+        Ok(Self(value.to_str().unwrap().to_owned()))
+    }
+
+    fn encode<E: Extend<headers::HeaderValue>>(&self, values: &mut E) {
+        let value = HeaderValue::from_str(&self.0).unwrap();
+        values.extend(std::iter::once(value));
+    }
+}
+
+async fn capture_event(
+    Form(event): Form<Event>,
+    TypedHeader(ge): TypedHeader<GithubEvent>,
+) -> impl IntoResponse {
+    tokio::spawn(capture_event_inner(event, ge));
     (StatusCode::OK, String::new())
 }
 
-async fn capture_event_inner(event: Event) {
+async fn capture_event_inner(event: Event, ge: GithubEvent) {
     if let Ok(auth_state) = get_author_token_from_reactor(&event.connector).await {
         let mut payload: Value = serde_json::from_str(&event.payload).unwrap();
         // println!("{}", serde_json::to_string_pretty(&payload).unwrap());
@@ -282,21 +312,8 @@ async fn capture_event_inner(event: Event) {
                 let obj = payload.as_object_mut().unwrap();
                 obj.insert("sender_email".to_string(), email.into());
             }
-            let te = match payload.get("starred_at") {
-                Some(_) => "star",
-                _ => match payload["issue"] {
-                    Value::Object(_) => match payload["comment"] {
-                        Value::Object(_) => "issue_comment",
-                        _ => "issues",
-                    },
-                    _ => match payload["pull_request"] {
-                        Value::Object(_) => "pull_request",
-                        _ => "",
-                    },
-                },
-            };
             let triggers = serde_json::json!({
-                "events": te,
+                "events": ge.0,
                 "repo": payload["repository"]["node_id"].as_str().unwrap(),
             });
 
@@ -556,28 +573,84 @@ struct RouteReq {
     cursor: Option<String>,
 }
 
+macro_rules! events {
+    ($($key:expr => $value:expr,)+) => {
+        events!($($key => $value),+)
+    };
+    ($($key:expr => $value:expr),*) => {
+        {
+            let events = serde_json::json!({
+                "list": [
+                    $(
+                        {
+                            "field": $key,
+                            "value": $value,
+                        },
+                    )*
+                ]
+            });
+            Json(events)
+        }
+    }
+}
+
 async fn hook_events() -> impl IntoResponse {
-    let events = serde_json::json!({
-        "list": [
-            {
-                "field": "Issues",
-                "value": "issues"
-            },
-            {
-                "field": "Issue Comment",
-                "value": "issue_comment"
-            },
-            {
-                "field": "Star",
-                "value": "star"
-            },
-            {
-                "field": "Pull Request",
-                "value": "pull_request"
-            }
-        ]
-    });
-    Json(events)
+    events! {
+        "Branch Protection Rule" => "branch_protection_rule",
+        "Check Run" => "check_run",
+        "Check Suite" => "check_suite",
+        "Code Scanning Alert" => "code_scanning_alert",
+        "Commit Comment" => "commit_comment",
+        "Create" => "create",
+        "Delete" => "delete",
+        "Deploy Key" => "deploy_key",
+        "Deployment" => "deployment",
+        "Discussion" => "discussion",
+        "Discussion Comment" => "discussion_comment",
+        "Fork" => "fork",
+        "Github App Authorization" => "github_app_authorization",
+        "Gollum" => "gollum",
+        "Installation" => "installation",
+        "Installation Repositories" => "installation_repositories",
+        "Issue Comment" => "issue_comment",
+        "Issues" => "issues",
+        "Label" => "label",
+        "Marketplace Purchase" => "marketplace_purchase",
+        "Member" => "member",
+        "Membership" => "membership",
+        "Meta" => "meta",
+        "Milestone" => "milestone",
+        "Organization" => "organization",
+        "Org Block" => "org_block",
+        "Package" => "package",
+        "Page Build" => "page_build",
+        "Ping" => "ping",
+        "Project" => "project",
+        "Project Card" => "project_card",
+        "Project Column" => "project_column",
+        "Projects V2 Item" => "project_v2_item",
+        "Public" => "public",
+        "Pull Request" => "pull_request",
+        "Pull Request Review" => "pull_request_review",
+        "Pull Request Review Comment" => "pull_request_review_comment",
+        "Pull Request Review Thread" => "pull_request_review_thread",
+        "Push" => "push",
+        "Release" => "release",
+        "Repository Dispatch" => "repository_dispatch",
+        "Repository" => "repository",
+        "Repository Import" => "repository_import",
+        "Repository Vulnerability Alert" => "repository_vulnerability_alert",
+        "Security Advisory" => "security_advisory",
+        "Sponsorship" => "sponsorship",
+        "Star" => "star",
+        "Status" => "status",
+        "Team" => "team",
+        "Team Add" => "team_add",
+        "Watch" => "watch",
+        "Workflow Dispatch" => "workflow_dispatch",
+        "Workflow Job" => "workflow_job",
+        "Workflow Run" => "workflow_run",
+    }
 }
 
 async fn repos(Json(body): Json<RouteReq>) -> impl IntoResponse {

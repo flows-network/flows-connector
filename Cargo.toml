@@ -7,4 +7,6 @@ members = [
 	"twitter",
 	"gmail",
 	"notion",
+	"gitlab",
+	"discord"
 ]

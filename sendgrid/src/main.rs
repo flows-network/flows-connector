@@ -1,5 +1,5 @@
 use axum::{
-    extract::{Form, Json},
+    extract::{ContentLengthLimit, Form, Json, Multipart},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -8,6 +8,7 @@ use axum::{
 use lazy_static::lazy_static;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{env, net::SocketAddr, time::Duration};
 
 use rand::SeedableRng;
@@ -96,13 +97,6 @@ async fn auth(Form(auth_body): Form<AuthBody>) -> impl IntoResponse {
     return Ok((StatusCode::FOUND, [("Location", location)]));
 }
 
-#[derive(Debug, Serialize, Deserialize)]
-struct MailBody {
-    to_email: String,
-    subject: String,
-    content: String,
-}
-
 #[derive(Debug, Deserialize, Serialize)]
 struct PostBody {
     user: String,
@@ -111,43 +105,134 @@ struct PostBody {
 }
 
 async fn post_msg(Json(pb): Json<PostBody>) -> impl IntoResponse {
-    match serde_json::from_str::<MailBody>(&pb.text) {
-        Ok(mb) => {
-            let request = serde_json::json!({
-                "personalizations": [
-                    {
-                        "to": [
-                            {
-                                "email": mb.to_email
-                            }
-                        ]
-                    }
-                ],
-                "from": {
-                    "email": pb.user
-                },
-                "subject": mb.subject,
-                "content": [
-                    {
-                        "type": "text/html",
-                        "value": mb.content
-                    }
-                ]
+    if let Ok(mbs) = serde_json::from_str::<Vec<serde_json::Value>>(&pb.text) {
+        if mbs.is_empty() {
+            return (StatusCode::BAD_REQUEST, String::from(""));
+        }
+        for mut mb in mbs {
+            mb.as_object_mut().and_then(|obj| {
+                Some(obj.entry("from").or_insert(json!({
+                    "email": pb.user,
+                })))
             });
 
             let response = HTTP_CLIENT
                 .post("https://api.sendgrid.com/v3/mail/send")
                 .bearer_auth(decrypt(&pb.state))
-                .json(&request)
+                .json(&mb)
                 .send()
                 .await;
+
             match response {
-                Ok(_) => (StatusCode::OK, String::from("")),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)),
+                Ok(_) => (),
+                Err(e) => return (StatusCode::INTERNAL_SERVER_ERROR, format!("{}", e)),
             }
         }
-        Err(_) => (StatusCode::BAD_REQUEST, String::from("")),
+
+        (StatusCode::OK, String::from(""))
+    } else {
+        (StatusCode::BAD_REQUEST, String::from(""))
     }
+}
+
+async fn upload_msg(
+    ContentLengthLimit(mut multipart): ContentLengthLimit<
+        Multipart,
+        {
+            10 * 1024 * 1024 // 250mb
+        },
+    >,
+) -> impl IntoResponse {
+    tokio::spawn(async move {
+        let mut user = String::new();
+        let mut text = String::new();
+        let mut state = String::new();
+        // let mut forwards = String::new();
+
+        let mut data = Vec::new();
+
+        while let Some(field) = multipart.next_field().await.unwrap() {
+            let name = field.name().unwrap().to_owned();
+
+            match name.as_str() {
+                "file" => {
+                    let file_name = field.file_name().unwrap().to_string();
+                    let content_type = field.content_type().unwrap().to_string();
+                    if let Ok(datum) = field.bytes().await {
+                        data.push((file_name, content_type, datum));
+                    }
+                }
+                "user" => {
+                    if let Ok(u) = field.text().await {
+                        user = u;
+                    }
+                }
+                "state" => {
+                    if let Ok(s) = field.text().await {
+                        state = s;
+                    }
+                }
+                "text" => {
+                    if let Ok(t) = field.text().await {
+                        text = t;
+                    }
+                }
+                "forwards" => {
+                    // if let Ok(f) = field.text().await {
+                    //     if let Ok(fws) = serde_json::from_str(&f) {
+                    //         forwards = fws;
+                    //     }
+                    // }
+                }
+                _ => {}
+            };
+        }
+
+        if user.len() == 0 || state.len() == 0 {
+            return;
+        }
+
+        if data.len() > 0 {
+            let text_: Result<serde_json::Value, serde_json::Error> = serde_json::from_str(&text);
+            if let Ok(mut t) = text_ {
+                let mut atchsmts = vec![];
+                for (file_name, content_type, datum) in data.into_iter() {
+                    let name: String = file_name.chars().take_while(|&c| c != '.').collect();
+
+                    let content = base64::encode(datum);
+
+                    atchsmts.push(serde_json::json!({
+                        "content": content,
+                        "content_id": content[..10],
+                        "disposition": "inline",
+                        "filename": file_name,
+                        "name": name,
+                        "type": content_type,
+                    }));
+                }
+
+                // NOTE every email were injected the same attachments
+                for o in t.as_array_mut().unwrap() {
+                    o.as_object_mut().and_then(|obj| {
+                        Some(
+                            obj.entry("attachments")
+                                .or_insert(serde_json::json!(atchsmts)),
+                        )
+                    });
+                }
+
+                text = t.to_string();
+            } else {
+                return;
+            }
+        }
+
+        if text.len() > 0 {
+            tokio::spawn(post_msg(Json::from(PostBody { user, text, state })));
+        }
+    });
+
+    StatusCode::OK
 }
 
 #[tokio::main]
@@ -155,7 +240,7 @@ async fn main() {
     let app = Router::new()
         .route("/connect", get(connect))
         .route("/auth", post(auth))
-        .route("/post", post(post_msg));
+        .route("/post", post(post_msg).put(upload_msg));
 
     let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
     let port = port.parse::<u16>().unwrap();

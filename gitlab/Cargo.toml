@@ -1,5 +1,5 @@
 [package]
-name = "github-connector"
+name = "gitlab-connector"
 version = "0.1.0"
 edition = "2021"
 
@@ -9,12 +9,9 @@ edition = "2021"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 lazy_static = "1.4.0"
-openssl = "0.10.0"
 hex = "0.4.0"
-jsonwebtoken = "8.1.0"
 reqwest = { version = "0.11", features = ["json", "multipart"] }
-axum = { version="0.5", features = ["multipart", "headers"] }
-headers = "0.3.7"
+axum = { version="0.5.7", features = ["multipart"] }
 tokio = { version = "1", features = ["full"] }
 rsa = "0.6.0"
 rand = "0.8"
