@@ -654,8 +654,8 @@ async fn actions() -> impl IntoResponse {
                 "value": "create-issue",
             },
             {
-                "field": "Create Issue Comment",
-                "value": "create-issue-comment",
+                "field": "Create Issue/PR Comment",
+                "value": "create-comment",
             },
             {
                 "field": "Add labels to an issue",
@@ -686,7 +686,7 @@ struct PostBody {
 async fn post_msg(
     Json(msg_body): Json<PostBody>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
-    tokio::spawn(async move { post_msg_inner(msg_body) });
+    tokio::spawn(post_msg_inner(msg_body));
     Ok(StatusCode::OK)
 }
 
@@ -713,7 +713,7 @@ async fn post_action(node_id: &str, action: &str, access_token: &str, msg_text: 
                     .json(&serde_json::json!({ "title": msg_text })),
             ),
             // shared by issue & pr
-            "create-issue-comment" => {
+            "create-comment" => {
                 let msg: Value = serde_json::from_str(&msg_text).unwrap();
                 let issue_number = msg["issue_number"].as_str().unwrap();
                 let body = msg["body"].as_str().unwrap();
