@@ -9,6 +9,7 @@ use axum::{
 };
 use headers::HeaderName;
 use headers::{Header as IHeader, HeaderValue};
+use itertools::iproduct;
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use lazy_static::lazy_static;
 use reqwest::{Client, ClientBuilder};
@@ -428,7 +429,7 @@ async fn get_author_token_from_reactor(user: &str) -> Result<String, ()> {
     Err(())
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct RouteObject {
     field: String,
     value: String,
@@ -650,13 +651,25 @@ async fn actions() -> impl IntoResponse {
         "list": [
             {
                 "field": "Create Issue",
-                "value": "create-issue"
-            }
-        ]
+                "value": "create-issue",
+            },
+            {
+                "field": "Create Issue/PR Comment",
+                "value": "create-comment",
+            },
+            {
+                "field": "Add labels to an issue",
+                "value": "add-labels",
+            },
+            {
+                "field": "Add assignees to an issue",
+                "value": "add-assignees",
+            },
+        ],
     });
     Json(events)
 }
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize, Clone)]
 struct ForwardRoutes {
     action: Vec<RouteObject>,
     repo: Vec<RouteObject>,
@@ -673,37 +686,86 @@ struct PostBody {
 async fn post_msg(
     Json(msg_body): Json<PostBody>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
-    tokio::spawn(async move {
-        let auth_state = serde_json::from_str::<AuthState>(&decrypt(&msg_body.state)).unwrap();
-
-        let fwds = msg_body.forwards;
-        if fwds.action.len() == 1 && fwds.repo.len() == 1 {
-            if let Ok(repo_name) =
-                get_repo_namewithowner(&fwds.repo[0].value, &auth_state.access_token).await
-            {
-                match fwds.action[0].value.as_str() {
-                    "create-issue" => {
-                        _ = HTTP_CLIENT
-                            .post(format!("https://api.github.com/repos/{}/issues", repo_name))
-                            .header(header::ACCEPT, "application/vnd.github.v3+json")
-                            .header(
-                                header::USER_AGENT,
-                                "Github Connector of Second State Reactor",
-                            )
-                            .bearer_auth(auth_state.access_token)
-                            .json(&serde_json::json!({
-                                "title": msg_body.text
-                            }))
-                            .send()
-                            .await;
-                    }
-                    _ => (),
-                }
-            }
-        }
-    });
-
+    tokio::spawn(post_msg_inner(msg_body));
     Ok(StatusCode::OK)
+}
+
+async fn post_msg_inner(msg_body: PostBody) {
+    let auth_state = serde_json::from_str::<AuthState>(&decrypt(&msg_body.state)).unwrap();
+    let access_token = auth_state.access_token.to_owned();
+
+    let fwds = msg_body.forwards;
+    let msg_text = msg_body.text;
+
+    for (repo, action) in iproduct!(fwds.repo, fwds.action) {
+        post_action(&repo.value, &action.value, &access_token, &msg_text).await;
+    }
+}
+
+async fn post_action(node_id: &str, action: &str, access_token: &str, msg_text: &str) {
+    if let Ok(repo_name) = get_repo_namewithowner(node_id, access_token).await {
+        let api_base = format!("https://api.github.com/repos/{}", repo_name);
+
+        let rb = match action {
+            "create-issue" => Some(
+                HTTP_CLIENT
+                    .post(format!("{api_base}/issues"))
+                    .json(&serde_json::json!({ "title": msg_text })),
+            ),
+            // shared by issue & pr
+            "create-comment" => {
+                let msg: Value = serde_json::from_str(&msg_text).unwrap();
+                let issue_number = msg["issue_number"].as_str().unwrap();
+                let body = msg["body"].as_str().unwrap();
+                Some(
+                    HTTP_CLIENT
+                        .post(format!("{api_base}/issues/{}/comments", issue_number))
+                        .json(&serde_json::json!({
+                            "body": body,
+                        })),
+                )
+            }
+            "add-labels" => {
+                let msg: Value = serde_json::from_str(&msg_text).unwrap();
+                let issue_number = msg["issue_number"].as_str().unwrap();
+                let labels = msg["labels"].as_array().unwrap();
+                Some(
+                    HTTP_CLIENT
+                        .post(format!("{api_base}/issues/{}/labels", issue_number))
+                        .json(&serde_json::json!({
+                            "labels": labels,
+                        })),
+                )
+            }
+            "add-assignees" => {
+                let msg: Value = serde_json::from_str(&msg_text).unwrap();
+                let issue_number = msg["issue_number"].as_str().unwrap();
+                let assignees = msg["assignees"].as_array().unwrap();
+                Some(
+                    HTTP_CLIENT
+                        .post(format!("{api_base}/issues/{}/assignees", issue_number))
+                        .json(&serde_json::json!({
+                            "assignees": assignees,
+                        })),
+                )
+            }
+            _ => None,
+        }
+        .and_then(|r| {
+            Some(
+                r.header(header::ACCEPT, "application/vnd.github.v3+json")
+                    .header(
+                        header::USER_AGENT,
+                        "Github Connector of Second State Reactor",
+                    )
+                    .bearer_auth(access_token),
+            )
+        });
+
+        if let Some(r) = rb {
+            _ = r.send().await
+        }
+    }
 }
 
 async fn get_repo_namewithowner(node_id: &str, access_token: &str) -> Result<String, String> {
