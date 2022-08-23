@@ -658,11 +658,11 @@ async fn actions() -> impl IntoResponse {
                 "value": "create-comment",
             },
             {
-                "field": "Add labels to an issue",
+                "field": "Add labels to an Issue/PR",
                 "value": "add-labels",
             },
             {
-                "field": "Add assignees to an issue",
+                "field": "Add assignees to an Issue/PR",
                 "value": "add-assignees",
             },
         ],
@@ -715,7 +715,7 @@ async fn post_action(node_id: &str, action: &str, access_token: &str, msg_text: 
             // shared by issue & pr
             "create-comment" => {
                 let msg: Value = serde_json::from_str(&msg_text).unwrap();
-                let issue_number = msg["issue_number"].as_str().unwrap();
+                let issue_number = msg["issue_number"].as_u64().unwrap();
                 let body = msg["body"].as_str().unwrap();
                 Some(
                     HTTP_CLIENT
@@ -727,7 +727,7 @@ async fn post_action(node_id: &str, action: &str, access_token: &str, msg_text: 
             }
             "add-labels" => {
                 let msg: Value = serde_json::from_str(&msg_text).unwrap();
-                let issue_number = msg["issue_number"].as_str().unwrap();
+                let issue_number = msg["issue_number"].as_u64().unwrap();
                 let labels = msg["labels"].as_array().unwrap();
                 Some(
                     HTTP_CLIENT
@@ -739,7 +739,7 @@ async fn post_action(node_id: &str, action: &str, access_token: &str, msg_text: 
             }
             "add-assignees" => {
                 let msg: Value = serde_json::from_str(&msg_text).unwrap();
-                let issue_number = msg["issue_number"].as_str().unwrap();
+                let issue_number = msg["issue_number"].as_u64().unwrap();
                 let assignees = msg["assignees"].as_array().unwrap();
                 Some(
                     HTTP_CLIENT
