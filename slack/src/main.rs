@@ -190,13 +190,6 @@ struct File {
     url_private: String,
 }
 
-async fn _capture_event_body(b: axum::body::Bytes) -> impl IntoResponse {
-    let s = String::from_utf8_lossy(&b.to_vec()).into_owned();
-    let v: Value = serde_json::from_str(&s).unwrap();
-    println!("{}", serde_json::to_string_pretty(&v).unwrap());
-    (StatusCode::OK, String::new())
-}
-
 async fn capture_event(Json(evt_body): Json<EventBody>) -> impl IntoResponse {
     if let Some(challenge) = evt_body.challenge {
         return (StatusCode::OK, challenge);
