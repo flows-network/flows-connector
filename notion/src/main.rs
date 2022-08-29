@@ -394,9 +394,9 @@ async fn actions() -> impl IntoResponse {
     let actions = serde_json::json!({
         "list": [
             {
-                "field": "Add Page",
+                "field": "To create a new page",
                 "value": "add_page",
-                "desc": "Add a new page to the database"
+                "desc": "This connector takes the return value of the flow function to create a new page in a database in the connected Notion account. It corresponds to the `Create a page` call in the Notion API."
             }
         ]
     });

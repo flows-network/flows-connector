@@ -275,8 +275,9 @@ async fn events() -> impl IntoResponse {
     let events = serde_json::json!({
         "list": [
             {
-                "field": "File Uploaded",
-                "value": "file_uploaded"
+                "field": "Received an image",
+                "value": "file_uploaded",
+                "desc": "This connector is triggered when a new image is uploaded to the connected Cloudinary. It corresponds to the upload event in Cloudinary API."
             }
         ]
     });
@@ -287,8 +288,9 @@ async fn actions() -> impl IntoResponse {
     let actions = serde_json::json!({
         "list": [
             {
-                "field": "Upload File",
-                "value": "upload_file"
+                "field": "To upload an image",
+                "value": "upload_file",
+                "desc": "This connector takes the return value of the flow function, and uploads it as a media asset to the connected Cloudinary API. It corresponds to the upload event in Cloudinary API."
             }
         ]
     });

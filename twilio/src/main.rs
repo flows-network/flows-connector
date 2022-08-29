@@ -161,8 +161,9 @@ async fn actions() -> impl IntoResponse {
     let actions = serde_json::json!({
         "list": [
             {
-                "field": "Send SMS",
-                "value": "send_sms"
+                "field": "To send a SMS",
+                "value": "send_sms",
+                "desc": "This connector takes the return value of the flow function, sends it via the connected Twilio account. It corresponds to the `Send SMS` call in the Twilio API."
             }
         ]
     });

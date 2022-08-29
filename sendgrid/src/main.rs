@@ -240,8 +240,9 @@ async fn actions() -> impl IntoResponse {
     let actions = serde_json::json!({
         "list": [
             {
-                "field": "Send Email",
-                "value": "send_email"
+                "field": "To send an email",
+                "value": "send_email",
+                "desc": "This connector takes the return value of the flow function, creates an email message, and sends it via the connected Sendgrid account. It corresponds to the `Send Email` call in the SendGrid API."
             }
         ]
     });
