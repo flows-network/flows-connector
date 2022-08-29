@@ -108,7 +108,7 @@ async fn auth(req: Query<ApiEnv>) -> impl IntoResponse {
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
-async fn upload(
+async fn upload_raw(
     ContentLengthLimit(mut multipart): ContentLengthLimit<Multipart, { 250 * 1024 * 1024 }>,
 ) -> impl IntoResponse {
     let mut api_env = None;
@@ -162,8 +162,11 @@ async fn upload(
     }
 
     upload_file_to_cloudinary(
-        file,
-        file_name.ok_or((StatusCode::BAD_REQUEST, "Missing file name".to_string()))?,
+        File::Raw {
+            file,
+            file_path: file_name
+                .ok_or((StatusCode::BAD_REQUEST, "Missing file name".to_string()))?,
+        },
         file_type.ok_or((StatusCode::BAD_REQUEST, "Missing content type".to_string()))?,
         api_env.ok_or((StatusCode::BAD_REQUEST, "Missing API env".to_string()))?,
     )
@@ -172,41 +175,98 @@ async fn upload(
     .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
+#[derive(Deserialize)]
+struct ReactorReqBody {
+    // user: String,
+    state: String,
+    text: String,
+}
+
+#[derive(Deserialize)]
+struct FileUrl {
+    url: String,
+    file_type: String,
+}
+
+async fn upload_url(req: Json<ReactorReqBody>) -> impl IntoResponse {
+    let api_env = serde_json::from_str::<ApiEnv>(&decrypt(&req.state))
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid state".to_string()))?;
+
+    let file = serde_json::from_str::<FileUrl>(&req.text)
+        .map_err(|_| (StatusCode::BAD_REQUEST, "Invalid text".to_string()))?;
+
+    upload_file_to_cloudinary(
+        File::Url(file.url),
+        file.file_type,
+        api_env,
+    )
+    .await
+    .map(|_| (StatusCode::OK, "OK".to_string()))
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
+}
+
+enum File {
+    Raw { file: Vec<u8>, file_path: String },
+    Url(String),
+}
+
 async fn upload_file_to_cloudinary(
-    file: Vec<u8>,
-    file_path: String,
+    file: File,
     file_type: String,
     api_env: ApiEnv,
 ) -> Result<(), String> {
     let timestamp = chrono::Utc::now().timestamp().to_string();
     let hook = format!("{}/webhook", *SERVICE_API_PREFIX);
-    let file_name = file_path
-        .split_once(".")
-        .map_or_else(|| file_path.clone(), |f| f.0.to_string());
 
-    let signature = sha256::digest(format!(
-        "notification_url={}&public_id={}&timestamp={}{}",
-        hook, file_name, timestamp, api_env.api_secret
-    ));
+    match file {
+        File::Raw { file, file_path } => {
+            let file_name = file_path
+                .split_once(".")
+                .map_or_else(|| file_path.clone(), |f| f.0.to_string());
 
-    let form = Form::new()
-        .part("file", Part::bytes(file).file_name(file_path))
-        .text("api_key", api_env.api_key)
-        .text("notification_url", hook)
-        .text("public_id", file_name)
-        .text("timestamp", timestamp)
-        .text("signature", signature);
+            let signature = sha256::digest(format!(
+                "notification_url={}&public_id={}&timestamp={}{}",
+                hook, file_name, timestamp, api_env.api_secret
+            ));
 
-    HTTP_CLIENT
-        .post(format!(
-            "https://api.cloudinary.com/v1_1/{}/{}/upload",
-            api_env.cloud_name, file_type
-        ))
-        .multipart(form)
-        .send()
-        .await
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+            let form = Form::new()
+                .part("file", Part::bytes(file).file_name(file_path))
+                .text("api_key", api_env.api_key)
+                .text("notification_url", hook)
+                .text("public_id", file_name)
+                .text("timestamp", timestamp)
+                .text("signature", signature);
+
+            HTTP_CLIENT
+                .post(format!(
+                    "https://api.cloudinary.com/v1_1/{}/{}/upload",
+                    api_env.cloud_name, file_type
+                ))
+                .multipart(form)
+                .send()
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
+        File::Url(url) => {
+            let body = format!(
+                "notification_url={}&timestamp={}", hook, timestamp);
+
+            let signature = sha256::digest(format!("{}{}", body, api_env.api_secret));
+
+            HTTP_CLIENT
+                .post(format!(
+                    "https://api.cloudinary.com/v1_1/{}/{}/upload",
+                    api_env.cloud_name, file_type
+                ))
+                .body(format!("{}&file={}&api_key={}&signature={}",
+                    body, url, api_env.api_key, signature))
+                .send()
+                .await
+                .map(|_| ())
+                .map_err(|e| e.to_string())
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -306,7 +366,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .route("/connect", get(connect))
         .route("/auth", get(auth))
-        .route("/post", put(upload))
+        .route("/post", put(upload_raw).post(upload_url))
         .route("/webhook", post(capture_event))
         .route("/events", post(events))
         .route("/actions", post(actions));
