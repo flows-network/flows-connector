@@ -41,6 +41,8 @@ lazy_static! {
         .timeout(Duration::from_secs(TIMEOUT))
         .build()
         .expect("Can't build the reqwest client");
+    static ref EVENTS: &'static str = include_str!("./events.json");
+    static ref ACTIONS: &'static str = include_str!("./actions.json");
 }
 
 fn encrypt(data: &str) -> String {
@@ -605,6 +607,14 @@ async fn join_channel_inner(channel: &str, access_token: &str) -> Result<(), Str
     Err("Failed to create hook".to_string())
 }
 
+async fn list_events() -> impl IntoResponse {
+    ([("content-type", "application/json")], *EVENTS)
+}
+
+async fn list_actions() -> impl IntoResponse {
+    ([("content-type", "application/json")], *ACTIONS)
+}
+
 #[tokio::main]
 async fn main() {
     let app = Router::new()
@@ -612,7 +622,9 @@ async fn main() {
         .route("/event", post(capture_event))
         .route("/post", post(post_msg).put(upload_msg))
         .route("/channels", post(route_channels))
-        .route("/join-channel", post(join_channel));
+        .route("/join-channel", post(join_channel))
+        .route("/events", post(list_events))
+        .route("/actions", post(list_actions));
 
     let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
     let port = port.parse::<u16>().unwrap();

@@ -1,0 +1,9 @@
+{
+  "list": [
+    {
+      "field": "A message is sent to a channel.",
+      "value": "message",
+      "desc": "This connector is triggered when a new message is sent to a connected slack workspace. It corresponds to the message event in the Slack API."
+    }
+  ]
+}
