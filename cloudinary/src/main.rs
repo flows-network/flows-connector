@@ -271,6 +271,30 @@ async fn capture_event_inner(req: Notification) -> Result<(), String> {
     }
 }
 
+async fn events() -> impl IntoResponse {
+    let events = serde_json::json!({
+        "list": [
+            {
+                "field": "File Uploaded",
+                "value": "file_uploaded"
+            }
+        ]
+    });
+    Json(events)
+}
+
+async fn actions() -> impl IntoResponse {
+    let actions = serde_json::json!({
+        "list": [
+            {
+                "field": "Upload File",
+                "value": "upload_file"
+            }
+        ]
+    });
+    Json(actions)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = env::var("PORT")
@@ -281,7 +305,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/connect", get(connect))
         .route("/auth", get(auth))
         .route("/post", put(upload))
-        .route("/webhook", post(capture_event));
+        .route("/webhook", post(capture_event))
+        .route("/events", post(events))
+        .route("/actions", post(actions));
 
     axum::Server::bind(&SocketAddr::from(([127, 0, 0, 1], port)))
         .serve(app.into_make_service())

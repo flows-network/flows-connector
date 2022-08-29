@@ -157,12 +157,25 @@ async fn post_msg(Json(pb): Json<PostBody>) -> impl IntoResponse {
     }
 }
 
+async fn actions() -> impl IntoResponse {
+    let actions = serde_json::json!({
+        "list": [
+            {
+                "field": "Send SMS",
+                "value": "send_sms"
+            }
+        ]
+    });
+    Json(actions)
+}
+
 #[tokio::main]
 async fn main() {
     let app = Router::new()
         .route("/connect", get(connect))
         .route("/auth", post(auth))
-        .route("/post", post(post_msg));
+        .route("/post", post(post_msg))
+        .route("/actions", post(actions));
 
     let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
     let port = port.parse::<u16>().unwrap();
