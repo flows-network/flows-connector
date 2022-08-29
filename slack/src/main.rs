@@ -41,14 +41,8 @@ lazy_static! {
         .timeout(Duration::from_secs(TIMEOUT))
         .build()
         .expect("Can't build the reqwest client");
-    static ref EVENTS: Value = {
-        let str = include_str!("./events.json");
-        serde_json::from_str::<Value>(str).unwrap()
-    };
-    static ref ACTIONS: Value = {
-        let str = include_str!("./actions.json");
-        serde_json::from_str::<Value>(str).unwrap()
-    };
+    static ref EVENTS: &'static str = include_str!("./events.json");
+    static ref ACTIONS: &'static str = include_str!("./actions.json");
 }
 
 fn encrypt(data: &str) -> String {
@@ -614,11 +608,11 @@ async fn join_channel_inner(channel: &str, access_token: &str) -> Result<(), Str
 }
 
 async fn list_events() -> impl IntoResponse {
-    Json(&*EVENTS)
+    ([("content-type", "application/json")], *EVENTS)
 }
 
 async fn list_actions() -> impl IntoResponse {
-    Json(&*ACTIONS)
+    ([("content-type", "application/json")], *ACTIONS)
 }
 
 #[tokio::main]
