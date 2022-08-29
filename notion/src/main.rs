@@ -390,6 +390,19 @@ async fn post_msg(req: Json<ReactorReqBody>) -> impl IntoResponse {
     }
 }
 
+async fn actions() -> impl IntoResponse {
+    let actions = serde_json::json!({
+        "list": [
+            {
+                "field": "Add Page",
+                "value": "add_page",
+                "desc": "Add a new page to the database"
+            }
+        ]
+    });
+    Json(actions)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = env::var("PORT")
@@ -400,7 +413,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/connect", get(connect))
         .route("/auth", get(auth))
         .route("/databases", post(databases))
-        .route("/post", post(post_msg));
+        .route("/post", post(post_msg))
+        .route("/actions", post(actions));
     //.route("/properties", post(properties));
 
     axum::Server::bind(&SocketAddr::from(([127, 0, 0, 1], port)))

@@ -236,12 +236,25 @@ async fn upload_msg(
     StatusCode::OK
 }
 
+async fn actions() -> impl IntoResponse {
+    let actions = serde_json::json!({
+        "list": [
+            {
+                "field": "Send Email",
+                "value": "send_email"
+            }
+        ]
+    });
+    Json(actions)
+}
+
 #[tokio::main]
 async fn main() {
     let app = Router::new()
         .route("/connect", get(connect))
         .route("/auth", post(auth))
-        .route("/post", post(post_msg).put(upload_msg));
+        .route("/post", post(post_msg).put(upload_msg))
+        .route("/actions", post(actions));
 
     let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
     let port = port.parse::<u16>().unwrap();
