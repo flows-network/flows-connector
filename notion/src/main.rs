@@ -11,7 +11,7 @@ use rand_chacha::ChaCha8Rng;
 use reqwest::{header, Client};
 use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{json, Value, Map};
 use std::{env, net::SocketAddr, collections::HashMap};
 
 const RSA_BITS: usize = 2048;
@@ -137,7 +137,6 @@ struct ReactorReqBody {
     state: String,
     text: Option<String>,
     cursor: Option<String>,
-    routes: Option<Value>,
     forwards: Option<DatabaseRoute>,
 }
 
@@ -246,26 +245,10 @@ struct Database {
 #[derive(Deserialize)]
 struct DatabaseRoute {
     databases: Vec<RouteItem>,
-    properties: Option<Vec<RouteItem>>,
 }
 
 // ref https://developers.notion.com/reference/retrieve-a-database
-async fn properties(req: Json<ReactorReqBody>) -> impl IntoResponse {
-    let database_id = if let Some(routes) = &req.routes {
-        serde_json::from_value::<DatabaseRoute>(routes.clone())
-            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
-            .databases
-            .first()
-            .ok_or((
-                StatusCode::BAD_REQUEST,
-                "Missing databases routes".to_string(),
-            ))?
-            .value
-            .clone()
-    } else {
-        return Err((StatusCode::BAD_REQUEST, "Missing routes".to_string()));
-    };
-
+async fn properties(access_token: &String, database_id: &String) -> Result<HashMap<String, String>, String> {
     let database = HTTP_CLIENT
         .get(format!(
             "https://api.notion.com/v1/databases/{}",
@@ -277,37 +260,27 @@ async fn properties(req: Json<ReactorReqBody>) -> impl IntoResponse {
             "Github Connector of Second State Reactor",
         )
         .header("Notion-Version", "2022-06-28")
-        .bearer_auth(decrypt(&req.state))
+        .bearer_auth(decrypt(&access_token))
         .send()
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| e.to_string())?
         .json::<Database>()
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Parse database object failed: {}", e.to_string()),
-            )
-        })?;
+        .map_err(|e| format!("Parse database object failed: {}", e.to_string()))?;
 
-    let mut ret = RouteList {
-        cursor: None,
-        list: Vec::new(),
-    };
-
-    for (name, p) in database.properties {
-        match p.r#type.as_str() {
-            "title" | "rich_text" | "url" | "email" | "phone_number" => {
-                ret.list.push(RouteItem {
-                    field: format!("{} ({})", name, p.r#type),
-                    value: format!("{}&{}", name, p.r#type),
-                });
+    let ret = database.properties.into_iter()
+        .filter_map(|(name, property)| {
+            match property.r#type.as_str() {
+                "title" | "rich_text" | "url" | "email" | "phone_number" => Some((name, property.r#type)),
+                _ => None
             }
-            _ => {}
-        }
-    }
+        })
+        .collect::<HashMap<String, String>>();
 
-    Ok((StatusCode::OK, Json(ret)))
+    match ret.len() {
+        0 => Err("Properties was empty".to_string()),
+        _ => Ok(ret)
+    }
 }
 
 // ref https://developers.notion.com/docs/working-with-databases
@@ -327,40 +300,47 @@ async fn post_msg(req: Json<ReactorReqBody>) -> impl IntoResponse {
         ))?
         .value;
 
-    let (property, r#type) = &forwards
-        .properties
-        .as_ref()
-        .ok_or((StatusCode::BAD_REQUEST, "Missing properties".to_string()))?
-        .first()
-        .ok_or((StatusCode::BAD_REQUEST, "Missing properties forwards item".to_string()))?
-        .value
-        .split_once('&')
-        .ok_or((StatusCode::BAD_REQUEST, "Invalid properties forwards value".to_string()))?;
-
     let text = req
         .text
         .as_ref()
         .ok_or((StatusCode::BAD_REQUEST, "Missing text".to_string()))?;
 
-    let value = match *r#type {
-        "title" | "rich_text" => {
-            json!({
-                *r#type: [
-                    {
-                        "text": {
-                            "content": text
+    let property_values = serde_json::from_str::<HashMap<String, String>>(&text)
+        .map_err(|_|(StatusCode::BAD_REQUEST, "Invalid text: Invalid JSON data".to_string()))?;
+
+    let db_properties = properties(&req.state, database_id).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let mut properties = Map::new();
+
+    let to_property = |r#type, value| {
+        match r#type {
+            "title" | "rich_text" => {
+                json!({
+                    *r#type: [
+                        {
+                            "text": {
+                                "content": value
+                            }
                         }
-                    }
-                ]
-            })
-        },
-        "url" | "email" | "phone_number" => {
-            json!({
-                *r#type: text
-            })
-        },
-        _ => return Err((StatusCode::BAD_REQUEST, "Property type unsupported".to_string()))
+                    ]
+                })
+            },
+            "url" | "email" | "phone_number" => {
+                json!({
+                    *r#type: value
+                })
+            },
+            _ => unreachable!()
+        }
     };
+
+    for (name, p) in property_values {
+        let t = db_properties.get(&name)
+            .ok_or((StatusCode::BAD_REQUEST, format!("Property {} dose not exist", name)))?;
+
+        properties.insert(name.clone(), to_property(t, p));
+    }
 
     // ref https://developers.notion.com/docs/working-with-databases#adding-pages-to-a-database
     let body = json!({
@@ -368,9 +348,7 @@ async fn post_msg(req: Json<ReactorReqBody>) -> impl IntoResponse {
             "type": "database_id",
             "database_id": database_id,
         },
-        "properties": {
-            *property: value,
-        },
+        "properties": properties,
     });
 
     let response = HTTP_CLIENT
@@ -419,8 +397,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/auth", get(auth))
         .route("/databases", post(databases))
         .route("/post", post(post_msg))
-        .route("/actions", post(actions))
-        .route("/properties", post(properties));
+        .route("/actions", post(actions));
 
     axum::Server::bind(&SocketAddr::from(([127, 0, 0, 1], port)))
         .serve(app.into_make_service())
