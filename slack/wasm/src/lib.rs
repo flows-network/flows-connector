@@ -2,8 +2,6 @@
 use wasmedge_bindgen::*;
 use wasmedge_bindgen_macro::*;
 
-use std::env;
-
 use lazy_static::lazy_static;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;

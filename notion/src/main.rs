@@ -12,7 +12,7 @@ use reqwest::{header, Client};
 use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::{env, net::SocketAddr};
+use std::{env, net::SocketAddr, collections::HashMap};
 
 const RSA_BITS: usize = 2048;
 
@@ -137,7 +137,7 @@ struct ReactorReqBody {
     state: String,
     text: Option<String>,
     cursor: Option<String>,
-    // routes: Option<Value>,
+    routes: Option<Value>,
     forwards: Option<DatabaseRoute>,
 }
 
@@ -222,7 +222,7 @@ async fn databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
                 .title
                 .first()
                 .unwrap_or(&TitleItem {
-                    plain_text: item.id.clone(),
+                    plain_text: format!("Untitled ({})", item.id),
                 })
                 .plain_text
                 .clone(),
@@ -233,21 +233,23 @@ async fn databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
     Ok((StatusCode::OK, Json(ret)))
 }
 
-/*
+#[derive(Deserialize)]
+struct Property {
+    r#type: String,
+}
+
 #[derive(Deserialize)]
 struct Database {
-    properties: Value,
+    properties: HashMap<String, Property>,
 }
-*/
 
 #[derive(Deserialize)]
 struct DatabaseRoute {
     databases: Vec<RouteItem>,
-    // properties: Option<Vec<RouteItem>>,
+    properties: Option<Vec<RouteItem>>,
 }
 
 // ref https://developers.notion.com/reference/retrieve-a-database
-/*
 async fn properties(req: Json<ReactorReqBody>) -> impl IntoResponse {
     let database_id = if let Some(routes) = &req.routes {
         serde_json::from_value::<DatabaseRoute>(routes.clone())
@@ -288,31 +290,25 @@ async fn properties(req: Json<ReactorReqBody>) -> impl IntoResponse {
             )
         })?;
 
-    let properties = match database.properties {
-        Value::Object(p) => p,
-        _ => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Parse properties failed".to_string(),
-            ))
-        }
-    };
-
     let mut ret = RouteList {
         cursor: None,
         list: Vec::new(),
     };
 
-    for (name, _) in properties {
-        ret.list.push(RouteItem {
-            field: name.clone(),
-            value: name,
-        });
+    for (name, p) in database.properties {
+        match p.r#type.as_str() {
+            "title" | "rich_text" | "url" | "email" | "phone_number" => {
+                ret.list.push(RouteItem {
+                    field: format!("{} ({})", name, p.r#type),
+                    value: format!("{}&{}", name, p.r#type),
+                });
+            }
+            _ => {}
+        }
     }
 
     Ok((StatusCode::OK, Json(ret)))
 }
-*/
 
 // ref https://developers.notion.com/docs/working-with-databases
 //     https://developers.notion.com/reference/post-page
@@ -331,23 +327,40 @@ async fn post_msg(req: Json<ReactorReqBody>) -> impl IntoResponse {
         ))?
         .value;
 
-    /*
-    let property = &forwards
+    let (property, r#type) = &forwards
         .properties
         .as_ref()
         .ok_or((StatusCode::BAD_REQUEST, "Missing properties".to_string()))?
         .first()
-        .ok_or((
-            StatusCode::BAD_REQUEST,
-            "Missing properties forwards item".to_string(),
-        ))?
-        .value;
-    */
+        .ok_or((StatusCode::BAD_REQUEST, "Missing properties forwards item".to_string()))?
+        .value
+        .split_once('&')
+        .ok_or((StatusCode::BAD_REQUEST, "Invalid properties forwards value".to_string()))?;
 
     let text = req
         .text
         .as_ref()
         .ok_or((StatusCode::BAD_REQUEST, "Missing text".to_string()))?;
+
+    let value = match *r#type {
+        "title" | "rich_text" => {
+            json!({
+                *r#type: [
+                    {
+                        "text": {
+                            "content": text
+                        }
+                    }
+                ]
+            })
+        },
+        "url" | "email" | "phone_number" => {
+            json!({
+                *r#type: text
+            })
+        },
+        _ => return Err((StatusCode::BAD_REQUEST, "Property type unsupported".to_string()))
+    };
 
     // ref https://developers.notion.com/docs/working-with-databases#adding-pages-to-a-database
     let body = json!({
@@ -356,15 +369,7 @@ async fn post_msg(req: Json<ReactorReqBody>) -> impl IntoResponse {
             "database_id": database_id,
         },
         "properties": {
-            "Name": {
-                "title": [
-                    {
-                        "text": {
-                            "content": text,
-                        }
-                    }
-                ]
-            }
+            *property: value,
         },
     });
 
@@ -414,8 +419,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/auth", get(auth))
         .route("/databases", post(databases))
         .route("/post", post(post_msg))
-        .route("/actions", post(actions));
-    //.route("/properties", post(properties));
+        .route("/actions", post(actions))
+        .route("/properties", post(properties));
 
     axum::Server::bind(&SocketAddr::from(([127, 0, 0, 1], port)))
         .serve(app.into_make_service())
