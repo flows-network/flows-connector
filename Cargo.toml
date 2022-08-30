@@ -6,6 +6,7 @@ members = [
 	"sendgrid", "sendgrid/wasm",
 	"twitter",
 	"gmail",
+	"notion",
 	"gitlab",
 	"discord",
 	"jira"
