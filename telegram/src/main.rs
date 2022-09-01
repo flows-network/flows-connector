@@ -135,11 +135,16 @@ struct PostBody {
 async fn post_msg(Json(msg_body): Json<PostBody>) -> Result<StatusCode, (StatusCode, &'static str)> {
 	println!("{}",msg_body.text);
 
-	if msg_body.text.contains("ban"){
-		let words: Vec<&str> = msg_body.text.split(" ").collect();
+	let words: Vec<&str> = msg_body.text.split(" ").collect();
 
+	if words[0]=="ban"{
+		let words: Vec<&str> = msg_body.text.split(" ").collect();
 		let text = format!("ban user: {} \n from group: {}",words[4],words[3]);
 
+		tokio::spawn(HTTP_CLIENT
+			.post(format!("https://api.telegram.org/bot{}/banChatMember?chat_id={}&user_id={}",TELEGRAM_BOT_TOKEN.as_str(),words[1],words[2]))
+			.send());
+		
 		tokio::spawn(HTTP_CLIENT
 			.post(format!("https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}",TELEGRAM_BOT_TOKEN.as_str(),msg_body.user.as_str(),text))
 			.send());
