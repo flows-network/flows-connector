@@ -134,10 +134,22 @@ struct PostBody {
 
 async fn post_msg(Json(msg_body): Json<PostBody>) -> Result<StatusCode, (StatusCode, &'static str)> {
 	println!("{}",msg_body.text);
-	
-	tokio::spawn(HTTP_CLIENT
-		.post(format!("https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}",TELEGRAM_BOT_TOKEN.as_str(),msg_body.user.as_str(),msg_body.text))
-		.send());
+
+	if msg_body.text.contains("ban"){
+		let words: Vec<&str> = msg_body.text.split(" ").collect();
+
+		let text = format!("ban user: {} \n from group: {}",words[4],words[3]);
+
+		tokio::spawn(HTTP_CLIENT
+			.post(format!("https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}",TELEGRAM_BOT_TOKEN.as_str(),msg_body.user.as_str(),text))
+			.send());
+	}
+	else
+	{
+		tokio::spawn(HTTP_CLIENT
+			.post(format!("https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}",TELEGRAM_BOT_TOKEN.as_str(),msg_body.user.as_str(),msg_body.text))
+			.send());
+	}
 
 	Ok(StatusCode::OK)
 }
@@ -265,6 +277,16 @@ async fn hook_events() -> impl IntoResponse {
 	Json(events)
 }
 
+async fn delete_member() -> impl IntoResponse {
+
+	let result = serde_json::json!({
+		"state": "OK",
+		"member": "jack"
+	});
+
+	Json(result)
+}
+
 #[tokio::main]
 async fn main() {
 	let app = Router::new()
@@ -275,6 +297,7 @@ async fn main() {
 		.route("/revoke-hook", delete(revoke_hook))
 		.route("/create-hook", post(create_hook))
 		.route("/hook-events", post(hook_events))
+		.route("/deletemember",post(delete_member))
 		.route("/newmessage",post(newmessage));
 
 	let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
