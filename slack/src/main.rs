@@ -177,6 +177,7 @@ struct EventBody {
 
 #[derive(Debug, Deserialize)]
 struct Event {
+    typ: String,
     bot_id: Option<String>,
     channel: Option<String>,
     // channel_type: Option<String>,
@@ -199,26 +200,54 @@ async fn capture_event(Json(evt_body): Json<EventBody>) -> impl IntoResponse {
 
     if let Some(evt) = evt_body.event {
         // Only handle message which is sent by user
-        if evt.bot_id.is_none() {
-            let user = evt.user.unwrap_or_else(|| String::from(""));
-            let text = evt.text.unwrap_or_else(|| String::from(""));
-            let files = evt.files.unwrap_or_else(|| Vec::new());
-            let channel = evt.channel.unwrap_or_default();
-            tokio::spawn(post_event_to_reactor(user, text, files, channel));
-        }
+        match evt.typ.as_str() {
+            "message" => {
+                if evt.bot_id.is_none() {
+                    let user = evt.user.unwrap_or_else(|| String::from(""));
+                    let text = evt.text.unwrap_or_else(|| String::from(""));
+                    let files = evt.files.unwrap_or_else(|| Vec::new());
+                    let channel = evt.channel.unwrap_or_default();
+                    tokio::spawn(post_event_to_reactor(
+                        user,
+                        text,
+                        files,
+                        channel,
+                        "message".to_string(),
+                    ));
+                }
+            }
+            "member_joined_channel" => {
+                let user = evt.user.unwrap_or_default();
+                let channel = evt.channel.unwrap_or_default();
+                tokio::spawn(post_event_to_reactor(
+                    user.clone(),
+                    user,
+                    vec![],
+                    channel,
+                    "message".to_string(),
+                ));
+            }
+            _ => {}
+        };
     }
 
     (StatusCode::OK, String::new())
 }
 
-async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, channel: String) {
+async fn post_event_to_reactor(
+    user: String,
+    text: String,
+    files: Vec<File>,
+    channel: String,
+    event: String,
+) {
     if files.len() == 0 {
         let request = serde_json::json!({
             "user": user,
             "text": text,
             "triggers": {
                 "channels": channel,
-                "event": "message"
+                "event": event,
             }
         });
 
