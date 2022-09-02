@@ -16,6 +16,7 @@ use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
+use urlencoding;
 
 const TIMEOUT: u64 = 120;
 
@@ -104,8 +105,6 @@ struct ProjectName {
 
 async fn chat(Json(body): Json<Value>) -> impl IntoResponse {
 
-	println!("{:?}",body);
-
 	let events = serde_json::json!({
 		"list": [
 			{
@@ -133,26 +132,27 @@ struct PostBody {
 }
 
 async fn post_msg(Json(msg_body): Json<PostBody>) -> Result<StatusCode, (StatusCode, &'static str)> {
-	println!("{}",msg_body.text);
+
+	// println!("{}",msg_body.text);
 
 	let words: Vec<&str> = msg_body.text.split(" ").collect();
 
 	if words[0]=="ban"{
 		let words: Vec<&str> = msg_body.text.split(" ").collect();
-		let text = format!("ban user: {} \n from group: {}",words[4],words[3]);
+		let text = format!("ban user: {} \nfrom group: {}",words[4],words[3]);
 
 		tokio::spawn(HTTP_CLIENT
 			.post(format!("https://api.telegram.org/bot{}/banChatMember?chat_id={}&user_id={}",TELEGRAM_BOT_TOKEN.as_str(),words[1],words[2]))
 			.send());
 		
 		tokio::spawn(HTTP_CLIENT
-			.post(format!("https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}",TELEGRAM_BOT_TOKEN.as_str(),msg_body.user.as_str(),text))
+			.post(format!("https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}",TELEGRAM_BOT_TOKEN.as_str(),msg_body.user.as_str(),urlencoding::encode(text.as_str())))
 			.send());
 	}
 	else
 	{
 		tokio::spawn(HTTP_CLIENT
-			.post(format!("https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}",TELEGRAM_BOT_TOKEN.as_str(),msg_body.user.as_str(),msg_body.text))
+			.post(format!("https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}",TELEGRAM_BOT_TOKEN.as_str(),msg_body.user.as_str(),urlencoding::encode(msg_body.text.as_str())))
 			.send());
 	}
 
@@ -225,8 +225,8 @@ async fn revoke_hook_inner() -> Result<(), String> {
 }
 
 async fn newmessage(Json(msg_body): Json<Value>,headers: HeaderMap) -> Result<StatusCode, (StatusCode, &'static str)> {
-	println!("{:?}",msg_body);
-	println!("{:?}",headers["x-telegram-bot-api-secret-token"]);
+
+	// println!("{:?}",msg_body);
 
 	let words: Vec<&str> = headers["x-telegram-bot-api-secret-token"].to_str().unwrap().split("_").collect();
 
@@ -270,28 +270,6 @@ async fn post_event_to_reactor(user: &str, flow: &str, text: &str, triggers: Val
 	}
 }
 
-async fn hook_events() -> impl IntoResponse {
-	let events = serde_json::json!({
-		"list": [
-			{
-				"field": "message",
-				"value": "message"
-			}
-		]
-	});
-	Json(events)
-}
-
-async fn delete_member() -> impl IntoResponse {
-
-	let result = serde_json::json!({
-		"state": "OK",
-		"member": "jack"
-	});
-
-	Json(result)
-}
-
 #[tokio::main]
 async fn main() {
 	let app = Router::new()
@@ -301,8 +279,6 @@ async fn main() {
 		.route("/post", post(post_msg))
 		.route("/revoke-hook", delete(revoke_hook))
 		.route("/create-hook", post(create_hook))
-		.route("/hook-events", post(hook_events))
-		.route("/deletemember",post(delete_member))
 		.route("/newmessage",post(newmessage));
 
 	let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
