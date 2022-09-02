@@ -8,5 +8,6 @@ members = [
 	"gmail",
 	"notion",
 	"gitlab",
-	"discord"
+	"discord",
+	"jira"
 ]
