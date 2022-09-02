@@ -178,7 +178,10 @@ struct RefreshBody {
 
 async fn refresh(req: Json<RefreshBody>) -> impl IntoResponse {
     get_access_token(AuthMode::Refresh(decrypt(&req.refresh_state))).await
-        .map(|at| (StatusCode::OK, encrypt(&at.access_token)))
+        .map(|at| (StatusCode::OK, Json(json!({
+            "access_state": encrypt(&at.access_token),
+            "refresh_state": req.refresh_state
+        }))))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
