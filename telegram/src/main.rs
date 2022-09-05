@@ -160,11 +160,10 @@ async fn post_msg(
                 ))
                 .send(),
         );
-    } 
-    else if words[0] == "welcome"{
+    } else if words[0] == "welcome" {
         let words: Vec<&str> = msg_body.text.split(" ").collect();
         let mut text = format!("[{}, welcome\\!](tg://user?id={})", words[3], words[2]);
-        text = text.replace("_","\\_");
+        text = text.replace("_", "\\_");
 
         tokio::spawn(
             HTTP_CLIENT
@@ -176,8 +175,7 @@ async fn post_msg(
                 ))
                 .send(),
         );
-    }
-    else {
+    } else {
         tokio::spawn(
             HTTP_CLIENT
                 .post(format!(
