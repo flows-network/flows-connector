@@ -88,7 +88,7 @@ async fn schedules() -> impl IntoResponse {
                 "field": "Weather Report",
                 "value": "weather_report",
                 "desc": "This scheduler will return the weather info periodically",
-                "frequently": false,
+                "every_time": true,
                 "hook": format!("{}/hook", SERVICE_API_PREFIX.as_str())
             }
         ]
