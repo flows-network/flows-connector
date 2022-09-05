@@ -97,9 +97,24 @@ async fn schedules() -> impl IntoResponse {
 }
 
 #[derive(Debug, Deserialize)]
+struct Frequency {
+    rate: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct Schedule {
+    frequency: Frequency,
+}
+
+#[derive(Debug, Deserialize)]
+struct Triggers {
+    schedule: Vec<Schedule>,
+}
+
+#[derive(Debug, Deserialize)]
 struct HookBody {
     timestamp: Option<String>,
-    _rate: String,
+    triggers: Triggers,
 }
 
 async fn hook(Json(hook_body): Json<HookBody>) -> impl IntoResponse {
