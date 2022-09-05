@@ -177,6 +177,8 @@ struct EventBody {
 
 #[derive(Debug, Deserialize)]
 struct Event {
+    #[serde(rename = "type")]
+    typ: String,
     bot_id: Option<String>,
     channel: Option<String>,
     // channel_type: Option<String>,
@@ -199,30 +201,58 @@ async fn capture_event(Json(evt_body): Json<EventBody>) -> impl IntoResponse {
 
     if let Some(evt) = evt_body.event {
         // Only handle message which is sent by user
-        if evt.bot_id.is_none() {
-            let user = evt.user.unwrap_or_else(|| String::from(""));
-            let text = evt.text.unwrap_or_else(|| String::from(""));
-            let files = evt.files.unwrap_or_else(|| Vec::new());
-            let channel = evt.channel.unwrap_or_default();
-            tokio::spawn(post_event_to_reactor(user, text, files, channel));
-        }
+        match evt.typ.as_str() {
+            "message" => {
+                if evt.bot_id.is_none() {
+                    let user = evt.user.unwrap_or_else(|| String::from(""));
+                    let text = evt.text.unwrap_or_else(|| String::from(""));
+                    let files = evt.files.unwrap_or_else(|| Vec::new());
+                    let channel = evt.channel.unwrap_or_default();
+                    tokio::spawn(post_event_to_reactor(
+                        user,
+                        text,
+                        files,
+                        channel,
+                        "message".to_string(),
+                    ));
+                }
+            }
+            "member_joined_channel" => {
+                let user = evt.user.unwrap_or_default();
+                let channel = evt.channel.unwrap_or_default();
+                tokio::spawn(post_event_to_reactor(
+                    user.clone(),
+                    user,
+                    vec![],
+                    channel,
+                    "member_joined_channel".to_string(),
+                ));
+            }
+            _ => {}
+        };
     }
 
     (StatusCode::OK, String::new())
 }
 
-async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, channel: String) {
+async fn post_event_to_reactor(
+    user: String,
+    text: String,
+    files: Vec<File>,
+    channel: String,
+    event: String,
+) {
     if files.len() == 0 {
         let request = serde_json::json!({
             "user": user,
             "text": text,
             "triggers": {
                 "channels": channel,
-                "event": "message"
+                "event": event,
             }
         });
 
-        let _ = HTTP_CLIENT
+        _ = HTTP_CLIENT
             .post(format!("{}/api/_funcs/_post", REACTOR_API_PREFIX.as_str()))
             .header("Authorization", REACTOR_AUTH_TOKEN.as_str())
             .json(&request)
@@ -304,9 +334,25 @@ async fn get_file(access_token: &str, url_private: &str) -> Result<Vec<u8>, ()> 
 #[derive(Debug, Serialize, Deserialize)]
 struct ForwardRoutes {
     channels: Vec<RouteObject>,
+    actions: Vec<Action>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
+struct Action {
+    // field: String,
+    value: ActionValue,
+    // desc: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum ActionValue {
+    #[serde(rename = "send_message")]
+    SendMessage,
+    #[serde(rename = "send_dm")]
+    SendDM,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 struct PostBody {
     user: String,
     text: String,
@@ -317,22 +363,46 @@ struct PostBody {
 async fn post_msg(
     Json(msg_body): Json<PostBody>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
-    tokio::spawn(async move {
-        for ch in msg_body.forwards.channels.iter() {
-            let request = serde_json::json!({
-                "channel": ch.value,
-                "text": msg_body.text,
-            });
+    let action = msg_body.forwards.actions.get(0).unwrap();
+    match action.value {
+        ActionValue::SendMessage => {
+            tokio::spawn(async move {
+                for ch in msg_body.forwards.channels.iter() {
+                    let request = serde_json::json!({
+                        "channel": ch.value,
+                        "text": msg_body.text,
+                    });
 
-            tokio::spawn(
-                HTTP_CLIENT
-                    .post("https://slack.com/api/chat.postMessage")
-                    .bearer_auth(decrypt(msg_body.state.as_str()))
-                    .json(&request)
-                    .send(),
-            );
+                    tokio::spawn(
+                        HTTP_CLIENT
+                            .post("https://slack.com/api/chat.postMessage")
+                            .bearer_auth(decrypt(msg_body.state.as_str()))
+                            .json(&request)
+                            .send(),
+                    );
+                }
+            });
         }
-    });
+        ActionValue::SendDM => {
+            tokio::spawn(async move {
+                let value: Value = serde_json::from_str(&msg_body.text).unwrap();
+                let text = value.get("text").unwrap();
+                let user = value.get("user").unwrap();
+                let request = serde_json::json!({
+                    "channel": user,
+                    "text": text,
+                });
+
+                _ = tokio::spawn(
+                    HTTP_CLIENT
+                        .post("https://slack.com/api/chat.postMessage")
+                        .bearer_auth(decrypt(msg_body.state.as_str()))
+                        .json(&request)
+                        .send(),
+                );
+            });
+        }
+    }
 
     Ok(StatusCode::OK)
 }
