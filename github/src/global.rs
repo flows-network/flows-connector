@@ -8,8 +8,6 @@ use std::env;
 use lazy_static::lazy_static;
 use rand_chacha::ChaCha8Rng;
 
-use crate::models::_Event;
-
 pub const RSA_BITS: usize = 2048;
 
 pub const REPOS_PER_PAGE: u32 = 20;
@@ -46,14 +44,5 @@ lazy_static! {
         .timeout(Duration::from_secs(TIMEOUT))
         .build()
         .expect("Can't build the reqwest client");
-    pub static ref EVENTS: Vec<_Event> = {
-        let content = include_bytes!("../src/events.csv");
-        let mut rdr = csv::Reader::from_reader(content.as_slice());
-        rdr.deserialize()
-            .map(|r| {
-                let event: _Event = r.unwrap();
-                event
-            })
-            .collect()
-    };
+    pub static ref EVENTS: &'static str = include_str!("../src/events.json");
 }

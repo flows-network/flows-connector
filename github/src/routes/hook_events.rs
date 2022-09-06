@@ -1,11 +1,7 @@
-use axum::{Json, response::IntoResponse};
-use serde_json::json;
+use axum::response::IntoResponse;
 
 use crate::global::EVENTS;
 
 pub async fn hook_events() -> impl IntoResponse {
-    Json(json!({
-        "list": &*EVENTS
-    }))
+    ([("content-type", "application/json")], *EVENTS)
 }
-
