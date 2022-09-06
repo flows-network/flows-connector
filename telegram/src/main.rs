@@ -131,7 +131,7 @@ struct PostBody {
 async fn post_msg(
     Json(msg_body): Json<PostBody>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
-    // println!("{}",msg_body.text);
+    println!("{}",msg_body.text);
 
     let words: Vec<&str> = msg_body.text.split(" ").collect();
 
@@ -175,7 +175,21 @@ async fn post_msg(
                 ))
                 .send(),
         );
-    } else {
+    }else if words[0] == "warning" {
+        let words: Vec<&str> = msg_body.text.split(" ").collect();
+        let text = format!("[Warning\\! Can't send strange url in this group\\!](tg://user?id={})", words[2]);
+        tokio::spawn(
+            HTTP_CLIENT
+                .post(format!(
+                    "https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}&parse_mode=MarkdownV2",
+                    TELEGRAM_BOT_TOKEN.as_str(),
+                    words[1],
+                    text.as_str()
+                ))
+                .send(),
+        );
+    }
+    else {
         tokio::spawn(
             HTTP_CLIENT
                 .post(format!(
@@ -264,7 +278,7 @@ async fn newmessage(
     Json(msg_body): Json<Value>,
     headers: HeaderMap,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
-    // println!("{:?}",msg_body);
+    println!("{:?}",msg_body);
 
     let words: Vec<&str> = headers["x-telegram-bot-api-secret-token"]
         .to_str()
