@@ -74,8 +74,8 @@ async fn connect() -> impl IntoResponse {
     let location = format!(
         "{}/api/connected?authorId={}&authorName={}&authorState={}",
         REACTOR_API_PREFIX.as_str(),
-        encode("normal_user"),
-        encode("Normal User"),
+        encode("general_user"),
+        encode("General User"),
         encrypt("")
     );
     (StatusCode::FOUND, [("Location", location)])
@@ -85,9 +85,9 @@ async fn schedules() -> impl IntoResponse {
     let schedules = json!({
         "list": [
             {
-                "field": "Weather Report",
-                "value": "weather_report",
-                "desc": "This scheduler will return the weather info periodically",
+                "field": "Alarm Clock",
+                "value": "alarm_clock",
+                "desc": "This scheduler will return 'Beep beep beep!' periodically",
                 "every_time": true,
                 "hook": format!("{}/hook", SERVICE_API_PREFIX.as_str())
             }
@@ -120,8 +120,8 @@ struct HookBody {
 async fn hook(Json(hook_body): Json<HookBody>) -> impl IntoResponse {
     if hook_body.timestamp.is_some() {
         tokio::spawn(post_event_to_reactor(
-            String::from("normal_user"),
-            String::from("sunny"),
+            String::from("general_user"),
+            String::from("Beep beep beep!"),
         ));
     }
 
@@ -138,7 +138,7 @@ async fn post_event_to_reactor(user: String, text: String) {
         "user": user,
         "text": text,
         "triggers": {
-            "schedule": "weather_report"
+            "schedule": "alarm_clock"
         }
     });
 
