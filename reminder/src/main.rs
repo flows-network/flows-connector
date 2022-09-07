@@ -114,13 +114,16 @@ struct Triggers {
 #[derive(Debug, Deserialize)]
 struct HookBody {
     timestamp: Option<String>,
+    flow: Option<String>,
     triggers: Triggers,
 }
 
 async fn hook(Json(hook_body): Json<HookBody>) -> impl IntoResponse {
-    if hook_body.timestamp.is_some() {
+    if hook_body.timestamp.is_some() && hook_body.flow.is_some() {
+        let flow = hook_body.flow.unwrap();
         tokio::spawn(post_event_to_haiku(
             String::from("general_user"),
+            flow,
             String::from("Beep beep beep!"),
         ));
     }
@@ -133,9 +136,10 @@ async fn hook(Json(hook_body): Json<HookBody>) -> impl IntoResponse {
     )
 }
 
-async fn post_event_to_haiku(user: String, text: String) {
+async fn post_event_to_haiku(user: String, flow: String, text: String) {
     let request = json!({
         "user": user,
+        "flow": flow,
         "text": text,
         "triggers": {
             "schedule": "alarm_clock"
