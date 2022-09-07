@@ -15,6 +15,5 @@ pull_request_review_comment,Activity related to pull request review comments. ,"
 release,Activity related to a release.,"Triggered when a release, pre-release, or draft of a release is released, edited, deleted, etc., on the connected Github repos. It corresponds to the release event in the GitHub API."
 repository,Activity related to a repository.,"Triggered when the connected Github repo is created, edited, deleted, etc. It corresponds to the repository event in the GitHub API."
 star,Activity related to a repository being starred. ,Triggered when the connected Github repo is starred or unstarred. It corresponds to the star event in the GitHub API.
-watch,Someone watches a repository.,Triggered when the connected Github repos is watched. It corresponds to the watch event in the GitHub API.
 workflow_job,Activities related to a GitHub Actions workflow job,"Triggered when a GitHub action is queued, in progress, or completed on the connected Github repos. It corresponds to the workflow_job event in the GitHub API."
 push,One or more commits are pushed to a repo branch or tag.,Triggered when commits are push to the connected Github repos. It corresponds to the push event in the GitHub API.
