@@ -27,10 +27,10 @@ const TIMEOUT: u64 = 120;
 lazy_static! {
     static ref SERVICE_API_PREFIX: String =
         env::var("SERVICE_API_PREFIX").expect("Env variable SERVICE_API_PREFIX not set");
-    static ref REACTOR_API_PREFIX: String =
-        env::var("REACTOR_API_PREFIX").expect("Env variable REACTOR_API_PREFIX not set");
-    static ref REACTOR_AUTH_TOKEN: String =
-        env::var("REACTOR_AUTH_TOKEN").expect("Env variable REACTOR_AUTH_TOKEN not set");
+    static ref HAIKU_API_PREFIX: String =
+        env::var("HAIKU_API_PREFIX").expect("Env variable HAIKU_API_PREFIX not set");
+    static ref HAIKU_AUTH_TOKEN: String =
+        env::var("HAIKU_AUTH_TOKEN").expect("Env variable HAIKU_AUTH_TOKEN not set");
     static ref RSA_RAND_SEED: [u8; 32] = env::var("RSA_RAND_SEED")
         .expect("Env variable RSA_RAND_SEED not set")
         .as_bytes()
@@ -73,7 +73,7 @@ fn _decrypt(data: &str) -> String {
 async fn connect() -> impl IntoResponse {
     let location = format!(
         "{}/api/connected?authorId={}&authorName={}&authorState={}",
-        REACTOR_API_PREFIX.as_str(),
+        HAIKU_API_PREFIX.as_str(),
         encode("general_user"),
         encode("General User"),
         encrypt("")
@@ -119,7 +119,7 @@ struct HookBody {
 
 async fn hook(Json(hook_body): Json<HookBody>) -> impl IntoResponse {
     if hook_body.timestamp.is_some() {
-        tokio::spawn(post_event_to_reactor(
+        tokio::spawn(post_event_to_haiku(
             String::from("general_user"),
             String::from("Beep beep beep!"),
         ));
@@ -133,7 +133,7 @@ async fn hook(Json(hook_body): Json<HookBody>) -> impl IntoResponse {
     )
 }
 
-async fn post_event_to_reactor(user: String, text: String) {
+async fn post_event_to_haiku(user: String, text: String) {
     let request = json!({
         "user": user,
         "text": text,
@@ -143,8 +143,8 @@ async fn post_event_to_reactor(user: String, text: String) {
     });
 
     let _ = HTTP_CLIENT
-        .post(format!("{}/api/_funcs/_post", REACTOR_API_PREFIX.as_str()))
-        .header("Authorization", REACTOR_AUTH_TOKEN.as_str())
+        .post(format!("{}/api/_funcs/_post", HAIKU_API_PREFIX.as_str()))
+        .header("Authorization", HAIKU_AUTH_TOKEN.as_str())
         .json(&request)
         .send()
         .await;
