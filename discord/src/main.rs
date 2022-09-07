@@ -364,7 +364,7 @@ impl EventHandler for Handler {
 }
 
 async fn create_client(){
-    let token = "OTkxNjE2MDI0MDExMDgzNzc2.Gf_3QU.gsVrsHc_UmyQrxkupxv2p6RJir-3tnj_YDAZyw";
+    let token = BOT_TOKEN.as_str();
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
