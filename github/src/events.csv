@@ -1,19 +1,19 @@
 ﻿GitHub Event,Event Title on WasmHaiku,Description
-commit_comment,A commit comment is created. ,Triggered when a new comment is created on a commit in the connected GitHub repos. It corresponds to the commit_comment event in the GitHub API.
-create,A Git branch or tag is created. ,Triggered when a new branch or tag is created on the connected Github repos. It corresponds to the create event in the GitHub API.
-delete,A Git branch or tag is deleted.,Triggered when a new branch or tag is deleted on the connected Github repos. It corresponds to the create event in the GitHub API.
-discussion,Activities related to a discussion.,"Triggered when a new discussion thread is created, edited, or deleted on any of the connected GitHub repos. It corresponds to the discussion event in the GitHub API."
-discussion_comment,Activities related to a comment in a discussion. ,Triggered when a new discussion comment is created or edited in the connected GitHub repos. It corresponds to the discussion_comment event in the GitHub API.
-fork,Someone forks a repository. ,Triggered when a new fork is created on the connected Github repos. It corresponds to the fork event in the GitHub API.
-issue_comment,Activity related to an issue or a pull request comment. ,"Triggered when a comment is created, edited, or deleted on the connected GitHub repos. It corresponds to the issue_comment event in the GitHub API. "
-issues,Activity related to an issue. ,"Triggered when an issue is created, edited, labeled, deleted, etc. on the connected Github repos. It corresponds to the issue event in the GitHub API."
-label,Activity related to a label.,"Triggered when a label is created, edited, or deleted on the connected Github repos. It corresponds to the label event in the GitHub API. "
-marketplace_purchase,Activity related to a GitHub Marketplace purchase.,"Triggered when a marketplace is purchased, changed, or canceled on the connected Github repos. It corresponds to the marketplace_purchase event in the GitHub API."
-pull_request,Activity related to pull requests.,"Triggered when a PR is created, edited, labeled, deleted, etc., on the connected Github repos. It corresponds to the pull_request event in the GitHub API."
-pull_request_review,Activity related to pull request reviews. ,"Triggered when a PR is created, edited, or deleted on the connected Github repos. It corresponds to the pull_request_review event in the GitHub API."
-pull_request_review_comment,Activity related to pull request review comments. ,"Triggered when a PR review comment is created, edited, or deleted on the connected Github repos. It corresponds to the pull_request_review_comment event in the GitHub API."
-release,Activity related to a release.,"Triggered when a release, pre-release, or draft of a release is released, edited, deleted, etc., on the connected Github repos. It corresponds to the release event in the GitHub API."
-repository,Activity related to a repository.,"Triggered when the connected Github repo is created, edited, deleted, etc. It corresponds to the repository event in the GitHub API."
-star,Activity related to a repository being starred. ,Triggered when the connected Github repo is starred or unstarred. It corresponds to the star event in the GitHub API.
+commit_comment,A commit comment is created,Triggered when a new comment is created on a commit in the connected GitHub repos. It corresponds to the commit_comment event in the GitHub API.
+create,A Git branch or tag is created,Triggered when a new branch or tag is created on the connected Github repos. It corresponds to the create event in the GitHub API.
+delete,A Git branch or tag is deleted,Triggered when a new branch or tag is deleted on the connected Github repos. It corresponds to the create event in the GitHub API.
+discussion,Activities related to a discussion,"Triggered when a new discussion thread is created, edited, or deleted on any of the connected GitHub repos. It corresponds to the discussion event in the GitHub API."
+discussion_comment,Activities related to a comment in a discussion,Triggered when a new discussion comment is created or edited in the connected GitHub repos. It corresponds to the discussion_comment event in the GitHub API.
+fork,Someone forks a repository,Triggered when a new fork is created on the connected Github repos. It corresponds to the fork event in the GitHub API.
+issue_comment,Activity related to an issue or a pull request comment,"Triggered when a comment is created, edited, or deleted on the connected GitHub repos. It corresponds to the issue_comment event in the GitHub API. "
+issues,Activity related to an issue,"Triggered when an issue is created, edited, labeled, deleted, etc. on the connected Github repos. It corresponds to the issue event in the GitHub API."
+label,Activity related to a label,"Triggered when a label is created, edited, or deleted on the connected Github repos. It corresponds to the label event in the GitHub API. "
+marketplace_purchase,Activity related to a GitHub Marketplace purchase,"Triggered when a marketplace is purchased, changed, or canceled on the connected Github repos. It corresponds to the marketplace_purchase event in the GitHub API."
+pull_request,Activity related to pull requests,"Triggered when a PR is created, edited, labeled, deleted, etc., on the connected Github repos. It corresponds to the pull_request event in the GitHub API."
+pull_request_review,Activity related to pull request reviews,"Triggered when a PR is created, edited, or deleted on the connected Github repos. It corresponds to the pull_request_review event in the GitHub API."
+pull_request_review_comment,Activity related to pull request review comments,"Triggered when a PR review comment is created, edited, or deleted on the connected Github repos. It corresponds to the pull_request_review_comment event in the GitHub API."
+release,Activity related to a release,"Triggered when a release, pre-release, or draft of a release is released, edited, deleted, etc., on the connected Github repos. It corresponds to the release event in the GitHub API."
+repository,Activity related to a repository,"Triggered when the connected Github repo is created, edited, deleted, etc. It corresponds to the repository event in the GitHub API."
+star,Activity related to a repository being starred,Triggered when the connected Github repo is starred or unstarred. It corresponds to the star event in the GitHub API.
 workflow_job,Activities related to a GitHub Actions workflow job,"Triggered when a GitHub action is queued, in progress, or completed on the connected Github repos. It corresponds to the workflow_job event in the GitHub API."
-push,One or more commits are pushed to a repo branch or tag.,Triggered when commits are push to the connected Github repos. It corresponds to the push event in the GitHub API.
+push,One or more commits are pushed to a repo branch or tag,Triggered when commits are push to the connected Github repos. It corresponds to the push event in the GitHub API.
