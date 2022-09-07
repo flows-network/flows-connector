@@ -3,24 +3,24 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post, put},
-    Router,
+    Router, body::Bytes,
 };
 use lazy_static::lazy_static;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use reqwest::{header, Client};
 use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
-use serde::Deserialize;
-use serde_json::json;
-use std::{net::SocketAddr, env};
+use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::{net::SocketAddr, env, collections::HashMap};
 
 const RSA_BITS: usize = 2048;
 
 lazy_static! {
     static ref HAIKU_API_PREFIX: String =
         env::var("HAIKU_API_PREFIX").expect("Env variable HAIKU_API_PREFIX not set");
-    // static ref HAIKU_AUTH_TOKEN: String =
-    //     env::var("HAIKU_AUTH_TOKEN").expect("Env variable HAIKU_AUTH_TOKEN not set");
+    static ref HAIKU_AUTH_TOKEN: String =
+        env::var("HAIKU_AUTH_TOKEN").expect("Env variable HAIKU_AUTH_TOKEN not set");
     static ref SERVICE_API_PREFIX: String =
         env::var("SERVICE_API_PREFIX").expect("Env var SERVICE_API_PREFIX not set");
     static ref DROPBOX_APP_CLIENT_ID: String =
@@ -82,7 +82,7 @@ struct AuthBody {
 #[derive(Deserialize, Clone)]
 struct AccessToken {
     access_token: String,
-    refresh_token: String,
+    refresh_token: Option<String>,
     account_id: Option<String>,
     // team_id: String,
 }
@@ -99,14 +99,13 @@ async fn get_access_token(mode: AuthMode) -> Result<AccessToken, String> {
                 ("code", code),
                 ("grant_type", "authorization_code".to_string()),
                 ("redirect_uri", REDIRECT_URL.to_string()),
-            ]
+            ].into_iter().collect::<HashMap<&'static str, String>>()
         },
         AuthMode::Refresh(refresh_token) => {
             [
                 ("refresh_token", refresh_token),
                 ("grant_type", "refresh_token".to_string()),
-                ("redirect_uri", REDIRECT_URL.to_string()),
-            ]
+            ].into_iter().collect::<HashMap<&'static str, String>>()
         },
     };
 
@@ -152,10 +151,14 @@ async fn auth(req: Query<AuthBody>) -> impl IntoResponse {
         Ok(at) => at,
         Err(e) => return Err((StatusCode::UNAUTHORIZED, e))
     };
+    
+    let refresh_token = at.refresh_token
+        .as_ref()
+        .ok_or((StatusCode::INTERNAL_SERVER_ERROR, "Missing refresh_token".to_string()))?;
 
     let id = at.account_id
         .as_ref()
-        .ok_or((StatusCode::BAD_REQUEST, "Missing refresh_token".to_string()))?;
+        .ok_or((StatusCode::BAD_REQUEST, "Missing account_id".to_string()))?;
 
     let account = get_account(&at).await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR,
@@ -167,7 +170,7 @@ async fn auth(req: Query<AuthBody>) -> impl IntoResponse {
         id,
         format!("{} ({})", account.name.display_name, account.email),
         encrypt(&at.access_token),
-        encrypt(&at.refresh_token)
+        encrypt(refresh_token)
     ))]))
 }
 
@@ -288,12 +291,7 @@ struct Notification {
 }
 
 async fn capture_event(Json(req): Json<Notification>) -> impl IntoResponse {
-    let accounts = req.list_folder.accounts
-        .into_iter()
-        .map(|a| a.split_once(":").unwrap_or_default().1.to_string())
-        .collect();
-
-    capture_event_inner(accounts).await
+    capture_event_inner(req.list_folder.accounts).await
         .unwrap_or_else(|e| println!("capture_event error: {}", e));
 
     StatusCode::OK
