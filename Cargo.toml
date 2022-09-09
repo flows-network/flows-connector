@@ -9,5 +9,6 @@ members = [
 	"notion",
 	"gitlab",
 	"discord",
-	"jira"
+	"jira",
+	"telegram"
 ]

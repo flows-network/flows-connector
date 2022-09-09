@@ -1,6 +1,6 @@
 use axum::{
     extract::{Json, Query},
-    http::StatusCode,
+    http::{header, StatusCode},
     response::IntoResponse,
     routing::{delete, get, post},
     Router,
@@ -11,12 +11,13 @@ use rand_chacha::ChaCha8Rng;
 use reqwest::{Client, ClientBuilder};
 use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{json,Value};
 use std::env;
 use std::net::SocketAddr;
 use std::time::Duration;
 use serenity::async_trait;
 use serenity::model::channel::Message;
+use serenity::model::channel::MessageType;
 use serenity::model::gateway::Ready;
 use serenity::prelude::*;
 use serenity::utils::MessageBuilder;
@@ -27,10 +28,10 @@ const TIMEOUT: u64 = 120;
 const RSA_BITS: usize = 2048;
 
 lazy_static! {
-    static ref REACTOR_API_PREFIX: String =
-        env::var("REACTOR_API_PREFIX").expect("Env variable REACTOR_API_PREFIX not set");
-    static ref REACTOR_AUTH_TOKEN: String =
-        env::var("REACTOR_AUTH_TOKEN").expect("Env variable REACTOR_AUTH_TOKEN not set");
+    static ref WASMHAIKU_API_PREFIX: String =
+        env::var("WASMHAIKU_API_PREFIX").expect("Env variable WASMHAIKU_API_PREFIX not set");
+    static ref WASMHAIKU_AUTH_TOKEN: String =
+        env::var("WASMHAIKU_AUTH_TOKEN").expect("Env variable WASMHAIKU_AUTH_TOKEN not set");
     static ref DISCORD_APP_CLIENT_ID: String =
         env::var("DISCORD_APP_CLIENT_ID").expect("Env variable DISCORD_APP_CLIENT_ID not set");
     static ref DISCORD_APP_CLIENT_SECRET: String = env::var("DISCORD_APP_CLIENT_SECRET")
@@ -106,7 +107,7 @@ async fn auth(Query(auth_body): Query<AuthBody>) -> impl IntoResponse {
                     });
                     let location = format!(
                         "{}/api/connected?authorId={}&authorName={}&authorState={}&refreshState={}",
-                        REACTOR_API_PREFIX.as_str(),
+                        WASMHAIKU_API_PREFIX.as_str(),
                         gu.0,
                         gu.1,
                         encrypt(&serde_json::to_string(&encrypted).unwrap()),
@@ -191,41 +192,96 @@ struct ForwardRoute {
     value: String,
 }
 
-#[derive(Deserialize, Serialize)]
-struct PostBody {
-    user: String,
-    text: String,
+#[derive(Serialize, Deserialize)]
+struct RouteItem {
+    field: String,
+    value: String,
+}
+
+#[derive(Deserialize)]
+struct DatabaseRoute {
+    channels: Vec<RouteItem>,
+    // properties: Option<Vec<RouteItem>>,
+}
+
+#[derive(Deserialize)]
+struct ReactorReqBody {
+    user: String,                   // Workspace ID
     state: String,
-    forwards: Vec<ForwardRoute>,
+    text: Option<String>,
+    // cursor: Option<String>,
+    // routes: Option<Value>,
+    forwards: Option<DatabaseRoute>,
 }
 
-async fn post_msg(
-    Json(msg_body): Json<PostBody>,
-) -> Result<StatusCode, (StatusCode, &'static str)> {
-    tokio::spawn(async move {
-        for pb in msg_body.forwards.iter() {
-            if pb.route.eq("channels") {
-                let request = serde_json::json!({
-                    "content": msg_body.text
-                  }
-                );
+async fn post_msg(req: Json<ReactorReqBody>) -> impl IntoResponse {
+    let forwards = req.forwards.as_ref().ok_or((
+        StatusCode::BAD_REQUEST,
+        "Invalid JSON data: Missing forwards".to_string(),
+    ))?;
 
-                tokio::spawn(
-                    HTTP_CLIENT
-                        .post(format!(
-                            "https://discord.com/api/channels/{}/messages",
-                            pb.value
-                        ))
-                        .header("Authorization", format!("Bot {}", BOT_TOKEN.as_str()))
-                        .json(&request)
-                        .send(),
-                );
-            }
-        }
-    });
+    let channel_id = &forwards
+        .channels
+        .first()
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "Invalid JSON data: Missing database".to_string(),
+        ))?
+        .value;
 
-    Ok(StatusCode::OK)
+    let text = req
+        .text
+        .as_ref()
+        .ok_or((StatusCode::BAD_REQUEST, "Missing text".to_string()))?;
+
+    // println!("{},{}",channel_id,text);
+
+    let request = serde_json::json!({"content": text});
+
+    let response = HTTP_CLIENT
+        .post(format!("https://discord.com/api/channels/{}/messages",channel_id))
+        .header("Authorization", format!("Bot {}", BOT_TOKEN.as_str()))
+        .json(&request)
+        .send()
+        .await;
+
+    match response {
+        Ok(r) => Ok((StatusCode::OK, r.bytes().await.unwrap_or_default().to_vec())),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("Post channel item failed: {}.", e.to_string()),
+        )),
+    }
 }
+
+// async fn post_msg(
+//     Json(req): Json<ReactorReqBody>,
+// ) -> impl IntoResponse {
+
+//     tokio::spawn(async move {
+//         for pb in msg_body.forwards.iter() {
+//             if pb.route.eq("channels") {
+//                 let request = serde_json::json!({
+//                     "content": msg_body.text
+//                   }
+//                 );
+
+//                 tokio::spawn(
+//                     HTTP_CLIENT
+//                         .post(format!(
+//                             "https://discord.com/api/channels/{}/messages",
+//                             pb.value
+//                         ))
+//                         .header("Authorization", format!("Bot {}", BOT_TOKEN.as_str()))
+//                         .json(&request)
+//                         .send(),
+//                 );
+//             }
+//         }
+//     });
+
+//     Ok(StatusCode::OK)
+// }
 
 #[derive(Deserialize)]
 struct RefreshState {
@@ -324,12 +380,58 @@ async fn route_channels(Json(body): Json<RouteReq>) -> impl IntoResponse {
     }
 }
 
-struct Handler;
+struct Handler{
+    data: String,
+}
 
 #[async_trait]
 impl EventHandler for Handler {
     async fn message(&self, context: Context, msg: Message) {
-        println!("{:?}",msg);
+        // println!("{:?}",msg);
+
+        let words: Vec<&str> = self.data
+        .as_str()
+        .split(",")
+        .collect(); 
+
+        let connector = words[0];
+        let flow = words[1];
+
+        // println!("{},{}",connector,flow);
+
+        let triggers = serde_json::json!({
+            "channels": msg.channel_id.to_string(),
+        });
+
+        let mut request = serde_json::json!({
+            "user": connector,
+            "flow": flow,
+            "text": msg.content.to_string(),
+            "triggers": triggers,
+        });
+
+        if msg.kind == MessageType::MemberJoin{
+            request = serde_json::json!({
+                "user": connector,
+                "flow": flow,
+                "text": "MemberJoin ".to_owned() + &msg.content,
+                "triggers": triggers,
+            });
+        }
+
+        // println!("{:?}",request);
+    
+        let response = HTTP_CLIENT
+            .post(format!("{}/api/_funcs/_post", WASMHAIKU_API_PREFIX.as_str()))
+            .header(header::AUTHORIZATION, WASMHAIKU_AUTH_TOKEN.as_str())
+            .json(&request)
+            .send()
+            .await;
+    
+        if let Err(e) = response {
+            println!("{:?}", e);
+        }
+
         if msg.content == "!ping" {
             let channel = match msg.channel_id.to_channel(&context).await {
                 Ok(channel) => channel,
@@ -338,7 +440,7 @@ impl EventHandler for Handler {
 
                     return;
                 },
-            };
+            }; 
 
             // The message builder allows for creating a message by
             // mentioning users dynamically, pushing "safe" versions of
@@ -355,6 +457,7 @@ impl EventHandler for Handler {
             if let Err(why) = msg.channel_id.say(&context.http, &response).await {
                 println!("Error sending message: {:?}", why);
             }
+     
         }
     }
 
@@ -363,13 +466,46 @@ impl EventHandler for Handler {
     }
 }
 
-async fn create_client(){
+async fn capture_event_inner(event: Message, connector: String, flow: String) {
+
+    let triggers = serde_json::json!({
+        "channels": event.channel_id.to_string(),
+    });
+
+    post_event_to_reactor(&connector, &flow, &event.content.to_string(), triggers).await;
+}
+
+async fn post_event_to_reactor(user: &str, flow: &str, text: &str, triggers: Value) {
+    let request = serde_json::json!({
+        "user": user,
+        "flow": flow,
+        "text": text,
+        "triggers": triggers,
+    });
+
+    let response = HTTP_CLIENT
+        .post(format!("{}/api/_funcs/_post", WASMHAIKU_API_PREFIX.as_str()))
+        .header(header::AUTHORIZATION, WASMHAIKU_AUTH_TOKEN.as_str())
+        .json(&request)
+        .send()
+        .await;
+
+    if let Err(e) = response {
+        println!("{:?}", e);
+    }
+}
+
+async fn create_client(Json(req): Json<Value>){
+    let text = format!("{},{}",req["connector"].as_str().unwrap(),req["flow_id"].as_str().unwrap());
     let token = BOT_TOKEN.as_str();
     let intents = GatewayIntents::GUILD_MESSAGES
         | GatewayIntents::DIRECT_MESSAGES
         | GatewayIntents::MESSAGE_CONTENT;
     let mut client =
-        serenity::prelude::Client::builder(&token, intents).event_handler(Handler).await.expect("Err creating client");
+        serenity::prelude::Client::builder(&token, intents)
+        .event_handler(Handler{data:text.to_string()})
+        .await
+        .expect("Err creating client");
 
     let result = serde_json::json!({
             "revoke": format!("{}/revoke-hook", SERVICE_API_PREFIX.as_str()),
@@ -384,14 +520,15 @@ async fn create_client(){
 #[derive(Debug, Deserialize)]
 struct HookReq {
     user: String,
-    state: String,
-    field: String,
-    value: String,
+    // state: String,
+    // field: String,
+    // value: String,
     flow: Option<String>,
 }
 
 async fn create_hook(Json(req): Json<HookReq>) -> impl IntoResponse {
-    match create_hook_inner(&req.user, &req.flow.unwrap(), &req.field, &req.value).await {
+    // println!("{:?}",req);
+    match create_hook_inner(&req.user, &req.flow.unwrap()).await {
         Ok(v) => Ok((StatusCode::CREATED, Json(v))),
         Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
     }
@@ -399,10 +536,12 @@ async fn create_hook(Json(req): Json<HookReq>) -> impl IntoResponse {
 
 async fn create_hook_inner(
     connector: &str,
-    flow_id: &str,
-    repo_full_name: &str,
-    id: &str,
+    flow_id: &str
 ) -> Result<Value, String> {
+    let request = serde_json::json!({
+        "connector": connector,
+        "flow_id": flow_id
+    });
 
     tokio::spawn(
         HTTP_CLIENT
@@ -410,6 +549,7 @@ async fn create_hook_inner(
                 "{}/create-client",
                 SERVICE_API_PREFIX.as_str(),
             ))
+            .json(&request)
             .send(),
     );
 
