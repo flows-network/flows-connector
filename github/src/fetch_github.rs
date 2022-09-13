@@ -59,15 +59,11 @@ pub async fn get_access_token(code: &str) -> Result<AccessTokenBody, String> {
         Ok(r) => {
             let token_body = r.json::<AccessTokenBody>().await;
             match token_body {
-                Ok(at) => return Ok(at),
-                Err(_) => {
-                    return Err("Failed to get access token".to_string());
-                }
+                Ok(at) => Ok(at),
+                Err(_) => Err("Failed to get access token".to_string()),
             }
         }
-        Err(_) => {
-            return Err("Failed to get access token".to_string());
-        }
+        Err(_) => Err("Failed to get access token".to_string()),
     }
 }
 
@@ -101,15 +97,11 @@ pub async fn get_installation_token(installation_id: u64) -> Result<String, Stri
         Ok(r) => {
             let token_body = r.json::<InstallationTokenBody>().await;
             match token_body {
-                Ok(at) => return Ok(at.token),
-                Err(_) => {
-                    return Err("Failed to get installation token".to_string());
-                }
+                Ok(at) => Ok(at.token),
+                Err(_) => Err("Failed to get installation token".to_string()),
             }
         }
-        Err(_) => {
-            return Err("Failed to get installation token".to_string());
-        }
+        Err(_) => Err("Failed to get installation token".to_string()),
     }
 }
 
@@ -132,14 +124,10 @@ pub async fn get_installed_repositories(
         .await;
     match response {
         Ok(r) => match r.json::<InstalledRepos>().await {
-            Ok(repos) => return Ok(repos),
-            Err(_) => {
-                return Err("Failed to get installed repositories".to_string());
-            }
+            Ok(repos) => Ok(repos),
+            Err(_) => Err("Failed to get installed repositories".to_string()),
         },
-        Err(_) => {
-            return Err("Failed to get installed repositories".to_string());
-        }
+        Err(_) => Err("Failed to get installed repositories".to_string()),
     }
 }
 

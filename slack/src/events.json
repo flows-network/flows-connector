@@ -9,6 +9,11 @@
       "field": "A member is joined a channel.",
       "value": "member_joined_channel",
       "desc": "This connector is triggered when a new member is joined a connected slack workspace. It corresponds to the message event in the Slack API."
+    },
+    {
+      "field": "A shortcut is triggered.",
+      "value": "shortcut",
+      "desc": "This connector is triggered when a shortcut is triggered in a connected slack workspace. It corresponds to the shortcut event in the Slack API."
     }
   ]
 }

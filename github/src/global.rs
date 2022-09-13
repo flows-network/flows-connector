@@ -3,12 +3,11 @@ use core::time::Duration;
 use rand::SeedableRng;
 use reqwest::{Client, ClientBuilder};
 use rsa::{RsaPrivateKey, RsaPublicKey};
+use serde_json::Value;
 use std::env;
 
 use lazy_static::lazy_static;
 use rand_chacha::ChaCha8Rng;
-
-use crate::models::_Event;
 
 pub const RSA_BITS: usize = 2048;
 
@@ -46,14 +45,8 @@ lazy_static! {
         .timeout(Duration::from_secs(TIMEOUT))
         .build()
         .expect("Can't build the reqwest client");
-    pub static ref EVENTS: Vec<_Event> = {
-        let content = include_bytes!("../src/events.csv");
-        let mut rdr = csv::Reader::from_reader(content.as_slice());
-        rdr.deserialize()
-            .map(|r| {
-                let event: _Event = r.unwrap();
-                event
-            })
-            .collect()
+    pub static ref EVENTS: Value = {
+        let content = include_str!("../src/events.json");
+        serde_json::from_str(content).unwrap()
     };
 }

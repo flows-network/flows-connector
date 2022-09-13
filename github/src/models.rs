@@ -125,16 +125,6 @@ pub struct RouteReq {
     pub cursor: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-pub struct _Event {
-    #[serde(rename(deserialize = "GitHub Event"))]
-    pub value: String,
-    #[serde(rename(deserialize = "Event Title on WasmHaiku"))]
-    pub field: String,
-    #[serde(rename(deserialize = "Description"))]
-    pub desc: String,
-}
-
 #[derive(Debug, Deserialize)]
 pub struct GithubUser {
     pub login: String,

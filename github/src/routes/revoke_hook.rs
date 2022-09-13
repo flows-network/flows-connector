@@ -12,7 +12,7 @@ pub async fn revoke_hook(
     Json(req): Json<HookReq>,
     Query(query): Query<RevokeQuery>,
 ) -> impl IntoResponse {
-    if req.routes.event.len() == 0 || req.routes.repo.len() != 1 {
+    if req.routes.event.is_empty() || req.routes.repo.len() != 1 {
         return Err((
             StatusCode::BAD_REQUEST,
             String::from("Bad routes, only one repo is allowed"),
@@ -50,7 +50,7 @@ pub async fn revoke_hook_inner(
         .bearer_auth(install_token)
         .send()
         .await;
-    if let Ok(_) = response {
+    if response.is_ok() {
         // the status can be 204 or 404
         // so no need to check r.status().is_success()
         // always return ok

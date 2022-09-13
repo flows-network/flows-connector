@@ -1,6 +1,7 @@
 use crate::{
+    fetch_github::get_repo_namewithowner,
     models::{AuthState, PostBody},
-    utils::decrypt, fetch_github::get_repo_namewithowner,
+    utils::decrypt,
 };
 
 use axum::Json;
@@ -35,14 +36,33 @@ pub async fn post_action(node_id: &str, action: &str, access_token: &str, msg_te
         let api_base = format!("https://api.github.com/repos/{}", repo_name);
 
         let rb = match action {
-            "create-issue" => Some(
-                HTTP_CLIENT
-                    .post(format!("{api_base}/issues"))
-                    .json(&serde_json::json!({ "title": msg_text })),
-            ),
+            "create-issue" => {
+                let post = HTTP_CLIENT.post(format!("{api_base}/issues"));
+                let msg: Result<Value, serde_json::Error> = serde_json::from_str(msg_text);
+                match msg {
+                    Ok(m) => {
+                        let title = m["title"].as_str().unwrap();
+                        let body = &m["body"];
+                        let milestone = &m["milestone"];
+                        let labels = m["labels"].as_array().expect("labels must be a array");
+                        let assignees = m["assignees"]
+                            .as_array()
+                            .expect("assignees must be a array of string");
+
+                        Some(post.json(&serde_json::json!({
+                            "title": title,
+                            "body": body,
+                            "milestone": milestone,
+                            "labels": labels,
+                            "assignees": assignees,
+                        })))
+                    }
+                    Err(_) => Some(post.json(&serde_json::json!({ "title": msg_text }))),
+                }
+            }
             // shared by issue & pr
             "create-comment" => {
-                let msg: Value = serde_json::from_str(&msg_text).unwrap();
+                let msg: Value = serde_json::from_str(msg_text).unwrap();
                 let issue_number = msg["issue_number"].as_u64().unwrap();
                 let body = msg["body"].as_str().unwrap();
                 Some(
@@ -54,7 +74,7 @@ pub async fn post_action(node_id: &str, action: &str, access_token: &str, msg_te
                 )
             }
             "add-labels" => {
-                let msg: Value = serde_json::from_str(&msg_text).unwrap();
+                let msg: Value = serde_json::from_str(msg_text).unwrap();
                 let issue_number = msg["issue_number"].as_u64().unwrap();
                 let labels = msg["labels"].as_array().unwrap();
                 Some(
@@ -66,7 +86,7 @@ pub async fn post_action(node_id: &str, action: &str, access_token: &str, msg_te
                 )
             }
             "add-assignees" => {
-                let msg: Value = serde_json::from_str(&msg_text).unwrap();
+                let msg: Value = serde_json::from_str(msg_text).unwrap();
                 let issue_number = msg["issue_number"].as_u64().unwrap();
                 let assignees = msg["assignees"].as_array().unwrap();
                 Some(
@@ -79,15 +99,13 @@ pub async fn post_action(node_id: &str, action: &str, access_token: &str, msg_te
             }
             _ => None,
         }
-        .and_then(|r| {
-            Some(
-                r.header(header::ACCEPT, "application/vnd.github.v3+json")
-                    .header(
-                        header::USER_AGENT,
-                        "Github Connector of Second State Reactor",
-                    )
-                    .bearer_auth(access_token),
-            )
+        .map(|r| {
+            r.header(header::ACCEPT, "application/vnd.github.v3+json")
+                .header(
+                    header::USER_AGENT,
+                    "Github Connector of Second State Reactor",
+                )
+                .bearer_auth(access_token)
         });
 
         if let Some(r) = rb {
