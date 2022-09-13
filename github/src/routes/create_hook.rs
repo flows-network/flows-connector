@@ -10,7 +10,7 @@ use crate::{
 };
 
 pub async fn create_hook(Json(req): Json<HookReq>) -> impl IntoResponse {
-    if req.routes.event.len() == 0 || req.routes.repo.len() != 1 {
+    if req.routes.event.is_empty() || req.routes.repo.len() != 1 {
         return Err((
             StatusCode::BAD_REQUEST,
             String::from("Bad routes, only one repo is allowed"),
@@ -66,10 +66,8 @@ pub async fn create_hook_inner(
                 });
                 return Ok(result);
             }
-        } else {
-            if let Ok(b) = r.text().await {
-                println!("{}", b);
-            }
+        } else if let Ok(b) = r.text().await {
+            println!("{}", b);
         }
     }
     Err("Failed to create hook".to_string())

@@ -52,16 +52,12 @@ pub async fn get_authed_user(access_token: &str) -> Result<GithubUser, String> {
         Ok(res) => {
             let body = res.json::<GithubUser>().await;
             match body {
-                Ok(gu) => {
-                    return Ok(gu);
-                }
-                Err(_) => {
-                    return Err("Failed to get user".to_string());
-                }
+                Ok(gu) => Ok(gu),
+                Err(_) => Err("Failed to get user".to_string()),
             }
         }
         Err(_) => {
-            return Err("Failed to get user".to_string());
+            Err("Failed to get user".to_string())
         }
     }
 }

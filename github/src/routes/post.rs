@@ -38,7 +38,7 @@ pub async fn post_action(node_id: &str, action: &str, access_token: &str, msg_te
         let rb = match action {
             "create-issue" => {
                 let post = HTTP_CLIENT.post(format!("{api_base}/issues"));
-                let msg: Result<Value, serde_json::Error> = serde_json::from_str(&msg_text);
+                let msg: Result<Value, serde_json::Error> = serde_json::from_str(msg_text);
                 match msg {
                     Ok(m) => {
                         let title = m["title"].as_str().unwrap();
@@ -62,7 +62,7 @@ pub async fn post_action(node_id: &str, action: &str, access_token: &str, msg_te
             }
             // shared by issue & pr
             "create-comment" => {
-                let msg: Value = serde_json::from_str(&msg_text).unwrap();
+                let msg: Value = serde_json::from_str(msg_text).unwrap();
                 let issue_number = msg["issue_number"].as_u64().unwrap();
                 let body = msg["body"].as_str().unwrap();
                 Some(
@@ -74,7 +74,7 @@ pub async fn post_action(node_id: &str, action: &str, access_token: &str, msg_te
                 )
             }
             "add-labels" => {
-                let msg: Value = serde_json::from_str(&msg_text).unwrap();
+                let msg: Value = serde_json::from_str(msg_text).unwrap();
                 let issue_number = msg["issue_number"].as_u64().unwrap();
                 let labels = msg["labels"].as_array().unwrap();
                 Some(
@@ -86,7 +86,7 @@ pub async fn post_action(node_id: &str, action: &str, access_token: &str, msg_te
                 )
             }
             "add-assignees" => {
-                let msg: Value = serde_json::from_str(&msg_text).unwrap();
+                let msg: Value = serde_json::from_str(msg_text).unwrap();
                 let issue_number = msg["issue_number"].as_u64().unwrap();
                 let assignees = msg["assignees"].as_array().unwrap();
                 Some(
@@ -99,15 +99,13 @@ pub async fn post_action(node_id: &str, action: &str, access_token: &str, msg_te
             }
             _ => None,
         }
-        .and_then(|r| {
-            Some(
-                r.header(header::ACCEPT, "application/vnd.github.v3+json")
-                    .header(
-                        header::USER_AGENT,
-                        "Github Connector of Second State Reactor",
-                    )
-                    .bearer_auth(access_token),
-            )
+        .map(|r| {
+            r.header(header::ACCEPT, "application/vnd.github.v3+json")
+                .header(
+                    header::USER_AGENT,
+                    "Github Connector of Second State Reactor",
+                )
+                .bearer_auth(access_token)
         });
 
         if let Some(r) = rb {
