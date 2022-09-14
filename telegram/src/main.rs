@@ -131,7 +131,7 @@ struct PostBody {
 async fn post_msg(
     Json(msg_body): Json<PostBody>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
-    // println!("{}",msg_body.text);
+    println!("{}",msg_body.text);
 
     let words: Vec<&str> = msg_body.text.split(" ").collect();
 
@@ -160,7 +160,36 @@ async fn post_msg(
                 ))
                 .send(),
         );
-    } else {
+    } else if words[0] == "welcome" {
+        let words: Vec<&str> = msg_body.text.split(" ").collect();
+        let mut text = format!("[{}, welcome\\!](tg://user?id={})", words[3], words[2]);
+        text = text.replace("_", "\\_");
+
+        tokio::spawn(
+            HTTP_CLIENT
+                .post(format!(
+                    "https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}&parse_mode=MarkdownV2",
+                    TELEGRAM_BOT_TOKEN.as_str(),
+                    words[1],
+                    text.as_str()
+                ))
+                .send(),
+        );
+    }else if words[0] == "warning" {
+        let words: Vec<&str> = msg_body.text.split(" ").collect();
+        let text = format!("[Warning\\! Can't send strange url in this group\\!](tg://user?id={})", words[2]);
+        tokio::spawn(
+            HTTP_CLIENT
+                .post(format!(
+                    "https://api.telegram.org/bot{}/sendMessage?chat_id={}&text={}&parse_mode=MarkdownV2",
+                    TELEGRAM_BOT_TOKEN.as_str(),
+                    words[1],
+                    text.as_str()
+                ))
+                .send(),
+        );
+    }
+    else {
         tokio::spawn(
             HTTP_CLIENT
                 .post(format!(
@@ -234,13 +263,13 @@ async fn revoke_hook() -> impl IntoResponse {
 }
 
 async fn revoke_hook_inner() -> Result<(), String> {
-    let response = HTTP_CLIENT
-        .post(format!(
-            "https://api.telegram.org/bot{}/deleteWebhook?drop_pending_updates=True",
-            TELEGRAM_BOT_TOKEN.as_str()
-        ))
-        .send()
-        .await;
+    // let response = HTTP_CLIENT
+    //     .post(format!(
+    //         "https://api.telegram.org/bot{}/deleteWebhook?drop_pending_updates=True",
+    //         TELEGRAM_BOT_TOKEN.as_str()
+    //     ))
+    //     .send()
+    //     .await;
 
     return Ok(());
 }
@@ -249,7 +278,7 @@ async fn newmessage(
     Json(msg_body): Json<Value>,
     headers: HeaderMap,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
-    // println!("{:?}",msg_body);
+    println!("{:?}",msg_body);
 
     let words: Vec<&str> = headers["x-telegram-bot-api-secret-token"]
         .to_str()
