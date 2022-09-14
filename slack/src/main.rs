@@ -200,9 +200,9 @@ async fn capture_event(Json(evt_body): Json<EventBody>) -> impl IntoResponse {
     }
 
     if let Some(evt) = evt_body.event {
-        // Only handle message which is sent by user
         match evt.typ.as_str() {
             "message" => {
+                // Only handle message which is sent by user
                 if evt.bot_id.is_none() {
                     let user = evt.user.unwrap_or_else(|| String::from(""));
                     let text = evt.text.unwrap_or_else(|| String::from(""));
@@ -677,6 +677,47 @@ async fn join_channel_inner(channel: &str, access_token: &str) -> Result<(), Str
     Err("Failed to create hook".to_string())
 }
 
+// {{{
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Shortcut {
+    user: User,
+    channel: ShortcutChannel,
+    callback_id: String,
+    // #[serde(rename = "response_url")]
+    // pub response_url: String,
+    pub message: Message,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct User {
+    pub id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ShortcutChannel {
+    pub id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Message {
+    pub text: String,
+}
+// }}}
+
+async fn inter(s: String) -> impl IntoResponse {
+    let body: Value = serde_urlencoded::from_str(&s).unwrap();
+    let payload = body.get("payload").unwrap();
+    let shortcut: Shortcut = serde_json::from_str(payload.as_str().unwrap()).unwrap();
+
+    tokio::spawn(post_event_to_reactor(
+        shortcut.user.id,
+        shortcut.message.text,
+        vec![],
+        shortcut.channel.id,
+        "shortcut".to_string(),
+    ));
+}
+
 async fn list_events() -> impl IntoResponse {
     ([("content-type", "application/json")], *EVENTS)
 }
@@ -693,6 +734,7 @@ async fn main() {
         .route("/post", post(post_msg).put(upload_msg))
         .route("/channels", post(route_channels))
         .route("/join-channel", post(join_channel))
+        .route("/inter", post(inter))
         .route("/events", post(list_events))
         .route("/actions", post(list_actions));
 
