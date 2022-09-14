@@ -37,28 +37,13 @@ pub async fn post_action(node_id: &str, action: &str, access_token: &str, msg_te
 
         let rb = match action {
             "create-issue" => {
-                let post = HTTP_CLIENT.post(format!("{api_base}/issues"));
-                let msg: Result<Value, serde_json::Error> = serde_json::from_str(msg_text);
-                match msg {
-                    Ok(m) => {
-                        let title = m["title"].as_str().unwrap();
-                        let body = &m["body"];
-                        let milestone = &m["milestone"];
-                        let labels = m["labels"].as_array().expect("labels must be a array");
-                        let assignees = m["assignees"]
-                            .as_array()
-                            .expect("assignees must be a array of string");
-
-                        Some(post.json(&serde_json::json!({
-                            "title": title,
-                            "body": body,
-                            "milestone": milestone,
-                            "labels": labels,
-                            "assignees": assignees,
-                        })))
-                    }
-                    Err(_) => Some(post.json(&serde_json::json!({ "title": msg_text }))),
-                }
+                // The outbound data and format are the same as the GitHub API, so pass them directly here
+                Some(
+                    HTTP_CLIENT
+                        .post(format!("{api_base}/issues"))
+                        .header(header::CONTENT_TYPE, "application/json")
+                        .body(msg_text.to_string())
+                )
             }
             // shared by issue & pr
             "create-comment" => {
@@ -67,7 +52,7 @@ pub async fn post_action(node_id: &str, action: &str, access_token: &str, msg_te
                 let body = msg["body"].as_str().unwrap();
                 Some(
                     HTTP_CLIENT
-                        .post(format!("{api_base}/issues/{}/comments", issue_number))
+                        .post(format!("{api_base}/issues/{issue_number}/comments"))
                         .json(&serde_json::json!({
                             "body": body,
                         })),
