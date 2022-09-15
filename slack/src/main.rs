@@ -334,7 +334,7 @@ async fn get_file(access_token: &str, url_private: &str) -> Result<Vec<u8>, ()> 
 #[derive(Debug, Serialize, Deserialize)]
 struct ForwardRoutes {
     channels: Vec<RouteObject>,
-    actions: Vec<Action>,
+    action: Vec<Action>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -363,7 +363,7 @@ struct PostBody {
 async fn post_msg(
     Json(msg_body): Json<PostBody>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
-    let action = msg_body.forwards.actions.get(0).unwrap();
+    let action = msg_body.forwards.action.get(0).unwrap();
     match action.value {
         ActionValue::SendMessage => {
             tokio::spawn(async move {
