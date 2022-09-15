@@ -163,7 +163,7 @@ async fn main() {
 
     let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
     let port = port.parse::<u16>().unwrap();
-    let addr = SocketAddr::from(([127, 0, 0, 1], port));
+    let addr = SocketAddr::from(([0, 0, 0, 0], port));
 
     Server::bind(&addr)
         .serve(app.into_make_service())
