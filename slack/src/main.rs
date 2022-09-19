@@ -529,6 +529,20 @@ struct Channels {
     channels: Vec<Channel>,
     response_metadata: RespMeta,
 }
+
+#[derive(Deserialize)]
+struct Failure {
+    // ok: bool,
+    error: String,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum MaybeChannels {
+    Channels(Channels),
+    Failure(Failure),
+}
+
 #[derive(Deserialize)]
 struct RouteReq {
     user: String,
@@ -542,11 +556,30 @@ async fn get_channels(access_token: &str, cursor: String) -> Result<Channels, St
 		.bearer_auth(access_token)
 		.send()
 		.await;
-    if let Ok(r) = response {
-        if let Ok(channels) = r.json::<Channels>().await {
-            if channels.ok {
-                return Ok(channels);
+    match response {
+        Ok(r) => {
+            if let Ok(maybe) = r.json::<MaybeChannels>().await {
+                match maybe {
+                    MaybeChannels::Channels(chs) => {
+                        if chs.ok {
+                            return Ok(chs);
+                        }
+                    }
+                    MaybeChannels::Failure(f) => {
+                        // removed: account_inactive
+                        // re-installed: invalid_auth
+                        if f.error == "account_inactive" || f.error == "invalid_auth" {
+                            return Err(
+                                "The account is expired. Please authenticate your account again."
+                                    .to_string(),
+                            );
+                        };
+                    }
+                }
             }
+        }
+        Err(e) => {
+            dbg!(e);
         }
     }
     Err("Failed to get channels".to_string())
