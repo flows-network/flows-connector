@@ -12,4 +12,5 @@ members = [
     "twilio",
     "notion",
     "dropbox",
+    "monday",
 ]
