@@ -1,5 +1,7 @@
 #![recursion_limit = "256"]
 
+use crate::installations::installations;
+
 use axum::{
     routing::{delete, get, post},
     Router,
@@ -7,7 +9,8 @@ use axum::{
 
 use github_connector::routes::{
     actions::actions, auth::auth, create_hook::create_hook, event::capture_event,
-    hook_events::hook_events, post::post_msg, repos::repos, revoke_hook::revoke_hook,
+    hook_events::hook_events, installations, post::post_msg, repos::repos,
+    revoke_hook::revoke_hook,
 };
 
 use std::env;
@@ -23,7 +26,8 @@ async fn main() {
         .route("/hook-events", post(hook_events))
         .route("/post", post(post_msg))
         .route("/repos", post(repos))
-        .route("/revoke-hook", delete(revoke_hook));
+        .route("/revoke-hook", delete(revoke_hook))
+        .route("/installations", post(installations));
 
     let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
     let port = port.parse::<u16>().unwrap();

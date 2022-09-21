@@ -7,7 +7,7 @@ use crate::{
         GITHUB_APP_ID, GITHUB_CLIENT_ID, GITHUB_CLIENT_SECRET, GITHUB_PRIVATE_KEY, HTTP_CLIENT,
         REPOS_PER_PAGE,
     },
-    models::{AccessTokenBody, GithubUser, InstallationTokenBody, InstalledRepos},
+    models::{AccessTokenBody, GithubUser, InstallationTokenBody, Installations, InstalledRepos},
     utils::get_now,
 };
 
@@ -64,6 +64,58 @@ pub async fn get_access_token(code: &str) -> Result<AccessTokenBody, String> {
             }
         }
         Err(_) => Err("Failed to get access token".to_string()),
+    }
+}
+
+pub async fn get_installations(token: &str) -> Result<Installations, String> {
+    dbg!(&token);
+
+    let response = HTTP_CLIENT
+        .get("https://api.github.com/user/installations")
+        .header(header::ACCEPT, "application/vnd.github+json")
+        .header(
+            header::USER_AGENT,
+            "Github Connector of Second State Reactor",
+        )
+        .bearer_auth(token);
+
+    dbg!(&response.try_clone().unwrap().build());
+
+    let response = response.send().await;
+
+    match response {
+        Ok(r) => {
+            // dbg!(&r);
+            dbg!(&r.text().await);
+            // let installations = r.json::<Installations>().await;
+            // dbg!(&installations);
+            // installations.map_err(|_| "Failed to get installations".to_string())
+            Err("".to_string())
+        }
+        Err(e) => {
+            dbg!(&e);
+            Err("Failed to get installations".to_string())
+        }
+    }
+}
+
+async fn get_installed_repos(token: &str, installation_id: u64) -> Result<InstalledRepos, String> {
+    let response = HTTP_CLIENT
+        .post(format!(
+            "https://api.github.com/user/installations/{}/repositories",
+            installation_id
+        ))
+        .header(header::ACCEPT, "application/vnd.github.v3+json")
+        .bearer_auth(token)
+        .send()
+        .await;
+
+    match response {
+        Ok(r) => {
+            let repos = r.json::<InstalledRepos>().await;
+            repos.map_err(|_| "Failed to get installations".to_string())
+        }
+        Err(_) => Err(format!("Failed to get installation: {}", installation_id)),
     }
 }
 

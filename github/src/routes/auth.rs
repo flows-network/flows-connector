@@ -56,8 +56,6 @@ pub async fn get_authed_user(access_token: &str) -> Result<GithubUser, String> {
                 Err(_) => Err("Failed to get user".to_string()),
             }
         }
-        Err(_) => {
-            Err("Failed to get user".to_string())
-        }
+        Err(_) => Err("Failed to get user".to_string()),
     }
 }
