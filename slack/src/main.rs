@@ -127,7 +127,7 @@ async fn get_access_token(code: &str) -> Result<OAuthAccessBody, String> {
     let params = [
         ("client_id", slack_client_id.as_str()),
         ("client_secret", slack_client_secret.as_str()),
-        ("code", &code),
+        ("code", code),
     ];
 
     let response = HTTP_CLIENT
@@ -204,9 +204,9 @@ async fn capture_event(Json(evt_body): Json<EventBody>) -> impl IntoResponse {
             "message" => {
                 // Only handle message which is sent by user
                 if evt.bot_id.is_none() {
-                    let user = evt.user.unwrap_or_else(|| String::from(""));
-                    let text = evt.text.unwrap_or_else(|| String::from(""));
-                    let files = evt.files.unwrap_or_else(|| Vec::new());
+                    let user = evt.user.unwrap_or_default();
+                    let text = evt.text.unwrap_or_default();
+                    let files = evt.files.unwrap_or_default();
                     let channel = evt.channel.unwrap_or_default();
                     tokio::spawn(post_event_to_reactor(
                         user,
@@ -242,7 +242,7 @@ async fn post_event_to_reactor(
     channel: String,
     event: String,
 ) {
-    if files.len() == 0 {
+    if files.is_empty() {
         let request = serde_json::json!({
             "user": user,
             "text": text,
@@ -476,11 +476,11 @@ async fn upload_msg(
             }
         }
 
-        if user.len() == 0 || state.len() == 0 {
+        if user.is_empty() || state.is_empty() {
             return;
         }
 
-        if parts.len() > 0 {
+        if !parts.is_empty() {
             for part in parts.into_iter() {
                 let mut form = multipart::Form::new().text("channels", user.clone());
                 form = form.part("file", part);
@@ -488,13 +488,15 @@ async fn upload_msg(
             }
         }
 
-        if text.len() > 0 && forwards.is_some() {
-            tokio::spawn(post_msg(Json::from(PostBody {
-                user,
-                state,
-                text,
-                forwards: forwards.unwrap(),
-            })));
+        if !text.is_empty() {
+            if let Some(fwds) = forwards {
+                tokio::spawn(post_msg(Json::from(PostBody {
+                    user,
+                    state,
+                    text,
+                    forwards: fwds,
+                })));
+            }
         }
     });
 
@@ -529,6 +531,20 @@ struct Channels {
     channels: Vec<Channel>,
     response_metadata: RespMeta,
 }
+
+#[derive(Deserialize)]
+struct Failure {
+    // ok: bool,
+    error: String,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum MaybeChannels {
+    Channels(Channels),
+    Failure(Failure),
+}
+
 #[derive(Deserialize)]
 struct RouteReq {
     user: String,
@@ -542,11 +558,30 @@ async fn get_channels(access_token: &str, cursor: String) -> Result<Channels, St
 		.bearer_auth(access_token)
 		.send()
 		.await;
-    if let Ok(r) = response {
-        if let Ok(channels) = r.json::<Channels>().await {
-            if channels.ok {
-                return Ok(channels);
+    match response {
+        Ok(r) => {
+            if let Ok(maybe) = r.json::<MaybeChannels>().await {
+                match maybe {
+                    MaybeChannels::Channels(chs) => {
+                        if chs.ok {
+                            return Ok(chs);
+                        }
+                    }
+                    MaybeChannels::Failure(f) => {
+                        // removed: account_inactive
+                        // re-installed: invalid_auth
+                        if f.error == "account_inactive" || f.error == "invalid_auth" {
+                            return Err(
+                                "The account is expired. Please authenticate your account again."
+                                    .to_string(),
+                            );
+                        };
+                    }
+                }
             }
+        }
+        Err(e) => {
+            dbg!(e);
         }
     }
     Err("Failed to get channels".to_string())
@@ -657,7 +692,7 @@ async fn join_channel(Json(req): Json<JoinChannelReq>) -> impl IntoResponse {
 async fn join_channel_inner(channel: &str, access_token: &str) -> Result<(), String> {
     let param = serde_json::json!({ "channel": channel });
     let response = HTTP_CLIENT
-        .post(format!("https://slack.com/api/conversations.join"))
+        .post("https://slack.com/api/conversations.join".to_string())
         .bearer_auth(access_token)
         .json(&param)
         .send()
