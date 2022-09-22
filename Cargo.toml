@@ -13,4 +13,6 @@ members = [
     "notion",
     "dropbox",
     "monday",
+    "jira",
+    "telegram"，
 ]
