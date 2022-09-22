@@ -14,6 +14,7 @@ pub struct PostBody {
 pub struct ForwardRoutes {
     pub action: Vec<RouteObject>,
     pub repo: Vec<RouteObject>,
+    // pub installations: Vec<RouteObject>,
 }
 
 // }}}
@@ -48,6 +49,30 @@ pub struct AuthState {
     pub access_token: String,
     pub installation_id: u64,
 }
+// }}}
+
+// installations {{{
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Installations {
+    // pub total_count: i64,
+    pub installations: Vec<Installation>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Installation {
+    pub id: u64,
+    pub repositories_url: String,
+    pub account: Account,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Account {
+    pub login: String,
+    #[serde(rename = "type")]
+    pub type_field: String,
+}
+
 // }}}
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -123,6 +148,12 @@ pub struct RouteReq {
     // user: String,
     pub state: String,
     pub cursor: Option<String>,
+    pub routes: Option<Routes>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Routes {
+    pub installation: Option<Vec<RouteObject>>,
 }
 
 #[derive(Debug, Deserialize)]

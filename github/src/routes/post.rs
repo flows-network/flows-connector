@@ -42,7 +42,7 @@ pub async fn post_action(node_id: &str, action: &str, access_token: &str, msg_te
                     HTTP_CLIENT
                         .post(format!("{api_base}/issues"))
                         .header(header::CONTENT_TYPE, "application/json")
-                        .body(msg_text.to_string())
+                        .body(msg_text.to_string()),
                 )
             }
             // shared by issue & pr
