@@ -68,8 +68,6 @@ pub async fn get_access_token(code: &str) -> Result<AccessTokenBody, String> {
 }
 
 pub async fn get_installations(token: &str) -> Result<Installations, String> {
-    dbg!(&token);
-
     let response = HTTP_CLIENT
         .get("https://api.github.com/user/installations")
         .header(header::ACCEPT, "application/vnd.github+json")
@@ -77,35 +75,35 @@ pub async fn get_installations(token: &str) -> Result<Installations, String> {
             header::USER_AGENT,
             "Github Connector of Second State Reactor",
         )
-        .bearer_auth(token);
-
-    dbg!(&response.try_clone().unwrap().build());
-
-    let response = response.send().await;
+        .bearer_auth(token)
+        .send()
+        .await;
 
     match response {
         Ok(r) => {
-            // dbg!(&r);
-            dbg!(&r.text().await);
-            // let installations = r.json::<Installations>().await;
-            // dbg!(&installations);
-            // installations.map_err(|_| "Failed to get installations".to_string())
-            Err("".to_string())
+            let installations = r.json::<Installations>().await;
+            dbg!(&installations);
+            installations.map_err(|_| "Failed to get installations".to_string())
         }
-        Err(e) => {
-            dbg!(&e);
-            Err("Failed to get installations".to_string())
-        }
+        Err(_) => Err("Failed to get installations".to_string()),
     }
 }
 
-async fn get_installed_repos(token: &str, installation_id: u64) -> Result<InstalledRepos, String> {
+pub async fn get_installed_repos(
+    token: &str,
+    installation_id: &str,
+    page: u32,
+) -> Result<InstalledRepos, String> {
     let response = HTTP_CLIENT
-        .post(format!(
-            "https://api.github.com/user/installations/{}/repositories",
-            installation_id
+        .get(format!(
+            "https://api.github.com/user/installations/{}/repositories?per_page={}&page={}",
+            installation_id, REPOS_PER_PAGE, page
         ))
         .header(header::ACCEPT, "application/vnd.github.v3+json")
+        .header(
+            header::USER_AGENT,
+            "Github Connector of Second State Reactor",
+        )
         .bearer_auth(token)
         .send()
         .await;
@@ -154,32 +152,6 @@ pub async fn get_installation_token(installation_id: u64) -> Result<String, Stri
             }
         }
         Err(_) => Err("Failed to get installation token".to_string()),
-    }
-}
-
-pub async fn get_installed_repositories(
-    install_token: &str,
-    page: u32,
-) -> Result<InstalledRepos, String> {
-    let response = HTTP_CLIENT
-        .get(format!(
-            "https://api.github.com/installation/repositories?per_page={}&page={}",
-            REPOS_PER_PAGE, page
-        ))
-        .header(header::ACCEPT, "application/vnd.github.v3+json")
-        .header(
-            header::USER_AGENT,
-            "Github Connector of Second State Reactor",
-        )
-        .bearer_auth(install_token)
-        .send()
-        .await;
-    match response {
-        Ok(r) => match r.json::<InstalledRepos>().await {
-            Ok(repos) => Ok(repos),
-            Err(_) => Err("Failed to get installed repositories".to_string()),
-        },
-        Err(_) => Err("Failed to get installed repositories".to_string()),
     }
 }
 

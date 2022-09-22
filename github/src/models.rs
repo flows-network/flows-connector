@@ -148,8 +148,12 @@ pub struct RouteReq {
     // user: String,
     pub state: String,
     pub cursor: Option<String>,
-    #[serde(rename = "installation")]
-    pub installation_id: Option<u64>,
+    pub routes: Option<Routes>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct Routes {
+    pub installation: Option<Vec<RouteObject>>,
 }
 
 #[derive(Debug, Deserialize)]
