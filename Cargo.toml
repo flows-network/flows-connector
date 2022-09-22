@@ -14,5 +14,5 @@ members = [
     "dropbox",
     "monday",
     "jira",
-    "telegram"，
+    "telegram",
 ]
