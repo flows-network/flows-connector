@@ -9,6 +9,7 @@ use lazy_static::lazy_static;
 use openssl::rsa::{Padding, Rsa};
 use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
+use serde_json::json;
 use std::{env, net::SocketAddr, time::Duration};
 use urlencoding::encode;
 
@@ -183,24 +184,25 @@ async fn refresh_token(Json(rs): Json<RefreshState>) -> impl IntoResponse {
         ("client_id", (*GOOGLE_APP_CLIENT_ID).as_str()),
         ("client_secret", (*GOOGLE_APP_CLIENT_SECRET).as_str()),
         ("grant_type", "refresh_token"),
-        ("refresh_token", &decrypt(rs.refresh_state)),
+        ("refresh_token", &decrypt(rs.refresh_state.clone())),
     ];
 
-    let response = HTTP_CLIENT
+    HTTP_CLIENT
         .post("https://oauth2.googleapis.com/token")
         .form(&params)
         .send()
-        .await;
-    match response {
-        Ok(r) => {
-            let token_body = r.json::<AccessTokenBody>().await;
-            match token_body {
-                Ok(at) => (StatusCode::OK, encrypt(at.access_token)),
-                Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-            }
-        }
-        Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
-    }
+        .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+
+    .json::<AccessTokenBody>()
+    .await
+    .map(|at| {
+        (StatusCode::OK, Json(json!({
+            "access_state": encrypt(at.access_token),
+            "refresh_state": rs.refresh_state
+        })))
+    })
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 #[tokio::main]

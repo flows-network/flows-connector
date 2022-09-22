@@ -1,0 +1,14 @@
+{
+  "list": [
+    {
+      "field": "To send a message",
+      "value": "send_message",
+      "desc": "This connector takes the return value of the flow function, and sends it as a message to a connected slack workspace. It corresponds to the message call in Slack API."
+    },
+    {
+      "field": "To send a direct message",
+      "value": "send_dm",
+      "desc": "This connector takes the return value of the flow function, and sends it as a direct message to a connected slack workspace. It corresponds to the message call in Slack API."
+    }
+  ]
+}

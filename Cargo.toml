@@ -1,14 +1,18 @@
 [workspace]
 members = [
-	"rsa-generator",
-	"github",
-	"slack", "slack/wasm",
-	"sendgrid", "sendgrid/wasm",
-	"twitter",
-	"gmail",
-	"notion",
-	"gitlab",
-	"discord",
-	"jira",
-	"telegram"
+    "rsa-generator",
+    "github",
+    "slack", "slack/wasm",
+    "sendgrid", "sendgrid/wasm",
+    "twitter",
+    "gmail",
+    "gitlab",
+    "discord",
+    "cloudinary",
+    "twilio",
+    "notion",
+    "dropbox",
+    "monday",
+    "jira",
+    "telegram"，
 ]

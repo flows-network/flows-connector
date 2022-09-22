@@ -41,6 +41,8 @@ lazy_static! {
         .timeout(Duration::from_secs(TIMEOUT))
         .build()
         .expect("Can't build the reqwest client");
+    static ref EVENTS: &'static str = include_str!("./events.json");
+    static ref ACTIONS: &'static str = include_str!("./actions.json");
 }
 
 fn encrypt(data: &str) -> String {
@@ -125,7 +127,7 @@ async fn get_access_token(code: &str) -> Result<OAuthAccessBody, String> {
     let params = [
         ("client_id", slack_client_id.as_str()),
         ("client_secret", slack_client_secret.as_str()),
-        ("code", &code),
+        ("code", code),
     ];
 
     let response = HTTP_CLIENT
@@ -175,6 +177,8 @@ struct EventBody {
 
 #[derive(Debug, Deserialize)]
 struct Event {
+    #[serde(rename = "type")]
+    typ: String,
     bot_id: Option<String>,
     channel: Option<String>,
     // channel_type: Option<String>,
@@ -190,43 +194,65 @@ struct File {
     url_private: String,
 }
 
-async fn _capture_event_body(b: axum::body::Bytes) -> impl IntoResponse {
-    let s = String::from_utf8_lossy(&b.to_vec()).into_owned();
-    let v: Value = serde_json::from_str(&s).unwrap();
-    println!("{}", serde_json::to_string_pretty(&v).unwrap());
-    (StatusCode::OK, String::new())
-}
-
 async fn capture_event(Json(evt_body): Json<EventBody>) -> impl IntoResponse {
     if let Some(challenge) = evt_body.challenge {
         return (StatusCode::OK, challenge);
     }
 
     if let Some(evt) = evt_body.event {
-        // Only handle message which is sent by user
-        if evt.bot_id.is_none() {
-            let user = evt.user.unwrap_or_else(|| String::from(""));
-            let text = evt.text.unwrap_or_else(|| String::from(""));
-            let files = evt.files.unwrap_or_else(|| Vec::new());
-            let channel = evt.channel.unwrap_or_default();
-            tokio::spawn(post_event_to_reactor(user, text, files, channel));
-        }
+        match evt.typ.as_str() {
+            "message" => {
+                // Only handle message which is sent by user
+                if evt.bot_id.is_none() {
+                    let user = evt.user.unwrap_or_default();
+                    let text = evt.text.unwrap_or_default();
+                    let files = evt.files.unwrap_or_default();
+                    let channel = evt.channel.unwrap_or_default();
+                    tokio::spawn(post_event_to_reactor(
+                        user,
+                        text,
+                        files,
+                        channel,
+                        "message".to_string(),
+                    ));
+                }
+            }
+            "member_joined_channel" => {
+                let user = evt.user.unwrap_or_default();
+                let channel = evt.channel.unwrap_or_default();
+                tokio::spawn(post_event_to_reactor(
+                    user.clone(),
+                    user,
+                    vec![],
+                    channel,
+                    "member_joined_channel".to_string(),
+                ));
+            }
+            _ => {}
+        };
     }
 
     (StatusCode::OK, String::new())
 }
 
-async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, channel: String) {
-    if files.len() == 0 {
+async fn post_event_to_reactor(
+    user: String,
+    text: String,
+    files: Vec<File>,
+    channel: String,
+    event: String,
+) {
+    if files.is_empty() {
         let request = serde_json::json!({
             "user": user,
             "text": text,
             "triggers": {
-                "channels": channel
+                "channels": channel,
+                "event": event,
             }
         });
 
-        let _ = HTTP_CLIENT
+        _ = HTTP_CLIENT
             .post(format!("{}/api/_funcs/_post", REACTOR_API_PREFIX.as_str()))
             .header("Authorization", REACTOR_AUTH_TOKEN.as_str())
             .json(&request)
@@ -236,7 +262,10 @@ async fn post_event_to_reactor(user: String, text: String, files: Vec<File>, cha
         let mut request = multipart::Form::new()
             .text("user", user)
             .text("text", text)
-            .text("triggers", format!(r#"{{"channels": "{}"}}"#, channel));
+            .text(
+                "triggers",
+                format!(r#"{{"channels": "{}", "event": "message"}}"#, channel),
+            );
 
         for f in files.into_iter() {
             if let Ok(b) = get_file(&access_token, &f.url_private).await {
@@ -302,41 +331,78 @@ async fn get_file(access_token: &str, url_private: &str) -> Result<Vec<u8>, ()> 
     Err(())
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct ForwardRoute {
-    route: String,
-    value: String,
+#[derive(Debug, Serialize, Deserialize)]
+struct ForwardRoutes {
+    channels: Vec<RouteObject>,
+    action: Vec<Action>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
+struct Action {
+    // field: String,
+    value: ActionValue,
+    // desc: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+enum ActionValue {
+    #[serde(rename = "send_message")]
+    SendMessage,
+    #[serde(rename = "send_dm")]
+    SendDM,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 struct PostBody {
     user: String,
     text: String,
     state: String,
-    forwards: Vec<ForwardRoute>,
+    forwards: ForwardRoutes,
 }
 
 async fn post_msg(
     Json(msg_body): Json<PostBody>,
 ) -> Result<StatusCode, (StatusCode, &'static str)> {
-    tokio::spawn(async move {
-        for pb in msg_body.forwards.iter() {
-            if pb.route.eq("channels") {
+    let action = msg_body.forwards.action.get(0).unwrap();
+    match action.value {
+        ActionValue::SendMessage => {
+            tokio::spawn(async move {
+                for ch in msg_body.forwards.channels.iter() {
+                    let request = serde_json::json!({
+                        "channel": ch.value,
+                        "text": msg_body.text,
+                    });
+
+                    tokio::spawn(
+                        HTTP_CLIENT
+                            .post("https://slack.com/api/chat.postMessage")
+                            .bearer_auth(decrypt(msg_body.state.as_str()))
+                            .json(&request)
+                            .send(),
+                    );
+                }
+            });
+        }
+        ActionValue::SendDM => {
+            tokio::spawn(async move {
+                let value: Value = serde_json::from_str(&msg_body.text).unwrap();
+                let text = value.get("text").unwrap();
+                let user = value.get("user").unwrap();
                 let request = serde_json::json!({
-                    "channel": pb.value,
-                    "text": msg_body.text,
+                    "channel": user,
+                    "text": text,
                 });
 
-                tokio::spawn(
+                _ = tokio::spawn(
                     HTTP_CLIENT
                         .post("https://slack.com/api/chat.postMessage")
                         .bearer_auth(decrypt(msg_body.state.as_str()))
                         .json(&request)
                         .send(),
                 );
-            }
+            });
         }
-    });
+    }
 
     Ok(StatusCode::OK)
 }
@@ -367,7 +433,7 @@ async fn upload_msg(
         let mut user = String::new();
         let mut text = String::new();
         let mut state = String::new();
-        let mut forwards = Vec::new();
+        let mut forwards = None;
 
         let mut parts = Vec::new();
         while let Some(field) = multipart.next_field().await.unwrap() {
@@ -401,8 +467,8 @@ async fn upload_msg(
                 }
                 "forwards" => {
                     if let Ok(f) = field.text().await {
-                        if let Ok(fws) = serde_json::from_str::<Vec<ForwardRoute>>(&f) {
-                            forwards = fws;
+                        if let Ok(fws) = serde_json::from_str::<ForwardRoutes>(&f) {
+                            forwards = Some(fws);
                         }
                     }
                 }
@@ -410,11 +476,11 @@ async fn upload_msg(
             }
         }
 
-        if user.len() == 0 || state.len() == 0 {
+        if user.is_empty() || state.is_empty() {
             return;
         }
 
-        if parts.len() > 0 {
+        if !parts.is_empty() {
             for part in parts.into_iter() {
                 let mut form = multipart::Form::new().text("channels", user.clone());
                 form = form.part("file", part);
@@ -422,13 +488,15 @@ async fn upload_msg(
             }
         }
 
-        if text.len() > 0 {
-            tokio::spawn(post_msg(Json::from(PostBody {
-                user,
-                state,
-                text,
-                forwards,
-            })));
+        if !text.is_empty() {
+            if let Some(fwds) = forwards {
+                tokio::spawn(post_msg(Json::from(PostBody {
+                    user,
+                    state,
+                    text,
+                    forwards: fwds,
+                })));
+            }
         }
     });
 
@@ -463,6 +531,20 @@ struct Channels {
     channels: Vec<Channel>,
     response_metadata: RespMeta,
 }
+
+#[derive(Deserialize)]
+struct Failure {
+    // ok: bool,
+    error: String,
+}
+
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum MaybeChannels {
+    Channels(Channels),
+    Failure(Failure),
+}
+
 #[derive(Deserialize)]
 struct RouteReq {
     user: String,
@@ -476,11 +558,30 @@ async fn get_channels(access_token: &str, cursor: String) -> Result<Channels, St
 		.bearer_auth(access_token)
 		.send()
 		.await;
-    if let Ok(r) = response {
-        if let Ok(channels) = r.json::<Channels>().await {
-            if channels.ok {
-                return Ok(channels);
+    match response {
+        Ok(r) => {
+            if let Ok(maybe) = r.json::<MaybeChannels>().await {
+                match maybe {
+                    MaybeChannels::Channels(chs) => {
+                        if chs.ok {
+                            return Ok(chs);
+                        }
+                    }
+                    MaybeChannels::Failure(f) => {
+                        // removed: account_inactive
+                        // re-installed: invalid_auth
+                        if f.error == "account_inactive" || f.error == "invalid_auth" {
+                            return Err(
+                                "The account is expired. Please authenticate your account again."
+                                    .to_string(),
+                            );
+                        };
+                    }
+                }
             }
+        }
+        Err(e) => {
+            dbg!(e);
         }
     }
     Err("Failed to get channels".to_string())
@@ -547,40 +648,51 @@ async fn route_channels(Json(body): Json<RouteReq>) -> impl IntoResponse {
         Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
     }
 }
+#[derive(Debug, Serialize, Deserialize)]
+struct RouteObject {
+    // field: String,
+    value: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct HookRoutes {
+    channels: Vec<RouteObject>,
+}
 
 #[derive(Debug, Deserialize)]
 struct JoinChannelReq {
     // user: String,
     state: String,
-    // field: String,
-    value: String,
+    routes: HookRoutes,
 }
 
 async fn join_channel(Json(req): Json<JoinChannelReq>) -> impl IntoResponse {
     let access_token = decrypt(req.state.as_str());
 
-    return match view_channel(&access_token, &req.value).await {
-        Some(ch) => {
-            if ch.is_channel.is_some()
-                && ch.is_channel.unwrap()
-                && (ch.is_member.is_some() && !ch.is_member.unwrap())
-            {
-                match join_channel_inner(&req.value, &access_token).await {
-                    Ok(v) => Ok((StatusCode::CREATED, Json(v))),
-                    Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
+    for chr in req.routes.channels {
+        match view_channel(&access_token, &chr.value).await {
+            Some(ch) => {
+                if ch.is_channel.is_some()
+                    && ch.is_channel.unwrap()
+                    && (ch.is_member.is_some() && !ch.is_member.unwrap())
+                {
+                    if let Err(err_msg) = join_channel_inner(&chr.value, &access_token).await {
+                        return Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg));
+                    }
                 }
-            } else {
-                Ok((StatusCode::OK, Json(())))
             }
-        }
-        None => Err((StatusCode::BAD_REQUEST, "Channel not found".to_string())),
-    };
+            None => {
+                return Err((StatusCode::BAD_REQUEST, "Channel not found".to_string()));
+            }
+        };
+    }
+    Ok((StatusCode::OK, Json(())))
 }
 
 async fn join_channel_inner(channel: &str, access_token: &str) -> Result<(), String> {
     let param = serde_json::json!({ "channel": channel });
     let response = HTTP_CLIENT
-        .post(format!("https://slack.com/api/conversations.join"))
+        .post("https://slack.com/api/conversations.join".to_string())
         .bearer_auth(access_token)
         .json(&param)
         .send()
@@ -600,6 +712,55 @@ async fn join_channel_inner(channel: &str, access_token: &str) -> Result<(), Str
     Err("Failed to create hook".to_string())
 }
 
+// {{{
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Shortcut {
+    user: User,
+    channel: ShortcutChannel,
+    callback_id: String,
+    // #[serde(rename = "response_url")]
+    // pub response_url: String,
+    pub message: Message,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct User {
+    pub id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ShortcutChannel {
+    pub id: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Message {
+    pub text: String,
+}
+// }}}
+
+async fn inter(s: String) -> impl IntoResponse {
+    let body: Value = serde_urlencoded::from_str(&s).unwrap();
+    let payload = body.get("payload").unwrap();
+    let shortcut: Shortcut = serde_json::from_str(payload.as_str().unwrap()).unwrap();
+
+    tokio::spawn(post_event_to_reactor(
+        shortcut.user.id,
+        shortcut.message.text,
+        vec![],
+        shortcut.channel.id,
+        "shortcut".to_string(),
+    ));
+}
+
+async fn list_events() -> impl IntoResponse {
+    ([("content-type", "application/json")], *EVENTS)
+}
+
+async fn list_actions() -> impl IntoResponse {
+    ([("content-type", "application/json")], *ACTIONS)
+}
+
 #[tokio::main]
 async fn main() {
     let app = Router::new()
@@ -607,7 +768,10 @@ async fn main() {
         .route("/event", post(capture_event))
         .route("/post", post(post_msg).put(upload_msg))
         .route("/channels", post(route_channels))
-        .route("/join-channel", post(join_channel));
+        .route("/join-channel", post(join_channel))
+        .route("/inter", post(inter))
+        .route("/events", post(list_events))
+        .route("/actions", post(list_actions));
 
     let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
     let port = port.parse::<u16>().unwrap();

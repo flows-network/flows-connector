@@ -11,8 +11,8 @@ use rand_chacha::ChaCha8Rng;
 use reqwest::{header, Client};
 use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
-use std::{env, net::SocketAddr};
+use serde_json::{json, Value, Map};
+use std::{env, net::SocketAddr, collections::HashMap};
 
 const RSA_BITS: usize = 2048;
 
@@ -137,7 +137,6 @@ struct ReactorReqBody {
     state: String,
     text: Option<String>,
     cursor: Option<String>,
-    // routes: Option<Value>,
     forwards: Option<DatabaseRoute>,
 }
 
@@ -222,7 +221,7 @@ async fn databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
                 .title
                 .first()
                 .unwrap_or(&TitleItem {
-                    plain_text: item.id.clone(),
+                    plain_text: format!("Untitled ({})", item.id),
                 })
                 .plain_text
                 .clone(),
@@ -233,37 +232,23 @@ async fn databases(req: Json<ReactorReqBody>) -> impl IntoResponse {
     Ok((StatusCode::OK, Json(ret)))
 }
 
-/*
+#[derive(Deserialize)]
+struct Property {
+    r#type: String,
+}
+
 #[derive(Deserialize)]
 struct Database {
-    properties: Value,
+    properties: HashMap<String, Property>,
 }
-*/
 
 #[derive(Deserialize)]
 struct DatabaseRoute {
     databases: Vec<RouteItem>,
-    // properties: Option<Vec<RouteItem>>,
 }
 
 // ref https://developers.notion.com/reference/retrieve-a-database
-/*
-async fn properties(req: Json<ReactorReqBody>) -> impl IntoResponse {
-    let database_id = if let Some(routes) = &req.routes {
-        serde_json::from_value::<DatabaseRoute>(routes.clone())
-            .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?
-            .databases
-            .first()
-            .ok_or((
-                StatusCode::BAD_REQUEST,
-                "Missing databases routes".to_string(),
-            ))?
-            .value
-            .clone()
-    } else {
-        return Err((StatusCode::BAD_REQUEST, "Missing routes".to_string()));
-    };
-
+async fn properties(access_token: &String, database_id: &String) -> Result<HashMap<String, String>, String> {
     let database = HTTP_CLIENT
         .get(format!(
             "https://api.notion.com/v1/databases/{}",
@@ -275,44 +260,28 @@ async fn properties(req: Json<ReactorReqBody>) -> impl IntoResponse {
             "Github Connector of Second State Reactor",
         )
         .header("Notion-Version", "2022-06-28")
-        .bearer_auth(decrypt(&req.state))
+        .bearer_auth(decrypt(&access_token))
         .send()
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| e.to_string())?
         .json::<Database>()
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("Parse database object failed: {}", e.to_string()),
-            )
-        })?;
+        .map_err(|e| format!("Parse database object failed: {}", e.to_string()))?;
 
-    let properties = match database.properties {
-        Value::Object(p) => p,
-        _ => {
-            return Err((
-                StatusCode::INTERNAL_SERVER_ERROR,
-                "Parse properties failed".to_string(),
-            ))
-        }
-    };
+    let ret = database.properties.into_iter()
+        .filter_map(|(name, property)| {
+            match property.r#type.as_str() {
+                "title" | "rich_text" | "url" | "email" | "phone_number" => Some((name, property.r#type)),
+                _ => None
+            }
+        })
+        .collect::<HashMap<String, String>>();
 
-    let mut ret = RouteList {
-        cursor: None,
-        list: Vec::new(),
-    };
-
-    for (name, _) in properties {
-        ret.list.push(RouteItem {
-            field: name.clone(),
-            value: name,
-        });
+    match ret.len() {
+        0 => Err("Properties was empty".to_string()),
+        _ => Ok(ret)
     }
-
-    Ok((StatusCode::OK, Json(ret)))
 }
-*/
 
 // ref https://developers.notion.com/docs/working-with-databases
 //     https://developers.notion.com/reference/post-page
@@ -331,23 +300,47 @@ async fn post_msg(req: Json<ReactorReqBody>) -> impl IntoResponse {
         ))?
         .value;
 
-    /*
-    let property = &forwards
-        .properties
-        .as_ref()
-        .ok_or((StatusCode::BAD_REQUEST, "Missing properties".to_string()))?
-        .first()
-        .ok_or((
-            StatusCode::BAD_REQUEST,
-            "Missing properties forwards item".to_string(),
-        ))?
-        .value;
-    */
-
     let text = req
         .text
         .as_ref()
         .ok_or((StatusCode::BAD_REQUEST, "Missing text".to_string()))?;
+
+    let property_values = serde_json::from_str::<HashMap<String, String>>(&text)
+        .map_err(|_|(StatusCode::BAD_REQUEST, "Invalid text: Invalid JSON data".to_string()))?;
+
+    let db_properties = properties(&req.state, database_id).await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
+
+    let mut properties = Map::new();
+
+    let to_property = |r#type, value| {
+        match r#type {
+            "title" | "rich_text" => {
+                json!({
+                    *r#type: [
+                        {
+                            "text": {
+                                "content": value
+                            }
+                        }
+                    ]
+                })
+            },
+            "url" | "email" | "phone_number" => {
+                json!({
+                    *r#type: value
+                })
+            },
+            _ => unreachable!()
+        }
+    };
+
+    for (name, p) in property_values {
+        let t = db_properties.get(&name)
+            .ok_or((StatusCode::BAD_REQUEST, format!("Property {} dose not exist", name)))?;
+
+        properties.insert(name.clone(), to_property(t, p));
+    }
 
     // ref https://developers.notion.com/docs/working-with-databases#adding-pages-to-a-database
     let body = json!({
@@ -355,17 +348,7 @@ async fn post_msg(req: Json<ReactorReqBody>) -> impl IntoResponse {
             "type": "database_id",
             "database_id": database_id,
         },
-        "properties": {
-            "Name": {
-                "title": [
-                    {
-                        "text": {
-                            "content": text,
-                        }
-                    }
-                ]
-            }
-        },
+        "properties": properties,
     });
 
     let response = HTTP_CLIENT
@@ -390,6 +373,19 @@ async fn post_msg(req: Json<ReactorReqBody>) -> impl IntoResponse {
     }
 }
 
+async fn actions() -> impl IntoResponse {
+    let actions = serde_json::json!({
+        "list": [
+            {
+                "field": "To create a new page",
+                "value": "add_page",
+                "desc": "This connector takes the return value of the flow function to create a new page in a database in the connected Notion account. It corresponds to the `Create a page` call in the Notion API."
+            }
+        ]
+    });
+    Json(actions)
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = env::var("PORT")
@@ -400,8 +396,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/connect", get(connect))
         .route("/auth", get(auth))
         .route("/databases", post(databases))
-        .route("/post", post(post_msg));
-    //.route("/properties", post(properties));
+        .route("/post", post(post_msg))
+        .route("/actions", post(actions));
 
     axum::Server::bind(&SocketAddr::from(([127, 0, 0, 1], port)))
         .serve(app.into_make_service())

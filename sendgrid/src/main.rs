@@ -15,6 +15,7 @@ use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
 use reqwest::{Client, ClientBuilder};
 use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
+use urlencoding::encode;
 
 const RSA_BITS: usize = 2048;
 
@@ -90,8 +91,8 @@ async fn auth(Form(auth_body): Form<AuthBody>) -> impl IntoResponse {
     let location = format!(
         "{}/api/connected?authorId={}&authorName={}&authorState={}",
         REACTOR_API_PREFIX.as_str(),
-        auth_body.sender_email,
-        auth_body.sender_email,
+        encode(auth_body.sender_email.as_str()),
+        encode(auth_body.sender_email.as_str()),
         encrypt(&auth_body.api_key)
     );
     return Ok((StatusCode::FOUND, [("Location", location)]));
@@ -235,12 +236,26 @@ async fn upload_msg(
     StatusCode::OK
 }
 
+async fn actions() -> impl IntoResponse {
+    let actions = serde_json::json!({
+        "list": [
+            {
+                "field": "To send an email",
+                "value": "send_email",
+                "desc": "This connector takes the return value of the flow function, creates an email message, and sends it via the connected Sendgrid account. It corresponds to the `Send Email` call in the SendGrid API."
+            }
+        ]
+    });
+    Json(actions)
+}
+
 #[tokio::main]
 async fn main() {
     let app = Router::new()
         .route("/connect", get(connect))
         .route("/auth", post(auth))
-        .route("/post", post(post_msg).put(upload_msg));
+        .route("/post", post(post_msg).put(upload_msg))
+        .route("/actions", post(actions));
 
     let port = env::var("PORT").unwrap_or_else(|_| "8090".to_string());
     let port = port.parse::<u16>().unwrap();
