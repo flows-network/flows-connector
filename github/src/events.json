@@ -88,7 +88,7 @@
     {
       "field": "One or more commits are pushed to a repo branch or tag",
       "value": "push",
-      "desc": "Triggered when commits are push to the connected Github repos. It corresponds to the push event in the GitHub API."
+      "desc": "Triggered when commits are pushed to the connected Github repos. It corresponds to the push event in the GitHub API."
     }
   ]
 }
