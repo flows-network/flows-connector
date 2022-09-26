@@ -86,8 +86,9 @@ async fn auth(req: Query<TokenBody>) -> impl IntoResponse {
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
         .and_then(|resp| {
-            if resp.status().is_success() {
-                Ok((
+            resp.status()
+                .is_success()
+                .then_some((
                     StatusCode::OK,
                     format!(
                         "{}/api/connected?authorId={}&authorName={}&authorState={}",
@@ -97,9 +98,7 @@ async fn auth(req: Query<TokenBody>) -> impl IntoResponse {
                         encrypt(&req.token)
                     ),
                 ))
-            } else {
-                Err(StatusCode::UNAUTHORIZED)
-            }
+                .ok_or(StatusCode::UNAUTHORIZED)
         })
 }
 
