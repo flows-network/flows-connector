@@ -82,7 +82,6 @@ pub async fn get_installations(token: &str) -> Result<Installations, String> {
     match response {
         Ok(r) => {
             let installations = r.json::<Installations>().await;
-            dbg!(&installations);
             installations.map_err(|_| "Failed to get installations".to_string())
         }
         Err(_) => Err("Failed to get installations".to_string()),
