@@ -21,6 +21,7 @@ pub async fn installations(Json(body): Json<RouteReq>) -> impl IntoResponse {
                 serde_json::json!({
                     "field": ri.account.login,
                     "value": ri.id.to_string(),
+                    "check": false,
                 })
             })
             .collect::<Vec<Value>>()
