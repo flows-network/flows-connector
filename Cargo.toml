@@ -15,4 +15,5 @@ members = [
     "monday",
     "jira",
     "telegram",
+    "airtable"
 ]
