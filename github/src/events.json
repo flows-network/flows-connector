@@ -17,7 +17,7 @@
     },
     {
       "field": "Activities related to a discussion",
-      "value": "dicussion",
+      "value": "discussion",
       "desc": "Triggered when a new discussion thread is created, edited, or deleted on any of the connected GitHub repos. It corresponds to the discussion event in the GitHub API."
     },
     {
