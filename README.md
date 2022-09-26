@@ -4,7 +4,7 @@
 
 flows-connector is one SaaS platform that [flows.network](https://flows.network/) has been integrated. That means you could easily automate your workflows between two SaaS connectors with a user-friendly UI.
 
-All the connectors are written in Rust. 🦀
+All the connectors are written in Rust in this repo. 🦀 
 
 ## How to use
 
@@ -26,7 +26,7 @@ Updated on 26th Sep, 2022
 | Cloudinary | ✅     | ✅      |      🛠️     |
 | Twillio    | 🛠️ | ✅      |      🛠️     |
 | Sendgrid   | 🛠️ | ✅      |       🛠️    |
-| Dropbox    | ✅     | ✅      |     🛠️      |
+| Dropbox    | 🛠️    | ✅      |     🛠️      |
 
 
 ## Contribution
