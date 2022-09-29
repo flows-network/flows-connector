@@ -61,7 +61,7 @@ async fn connect() -> impl IntoResponse {
     (StatusCode::FOUND, [(header::LOCATION, location)])
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 struct AuthBody {
     code: String,
 }
@@ -88,13 +88,13 @@ async fn auth(req: Query<AuthBody>) -> impl IntoResponse {
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Deserialize)]
 struct Object {
     id: String,
     name: String,
 }
 
-#[derive(Serialize, Deserialize)]
+#[derive(Deserialize)]
 struct AccessToken {
     access_token: String,
     refresh_token: String,
@@ -177,13 +177,13 @@ async fn refresh(req: Json<RefreshState>) -> impl IntoResponse {
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
-#[derive(Debug, Deserialize, Serialize, Default)]
+#[derive(Deserialize, Serialize, Default)]
 struct RouteItem {
     field: String,
     value: String,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Deserialize)]
 struct ForwardRoute {
     site: Vec<RouteItem>,
 
@@ -194,11 +194,12 @@ struct ForwardRoute {
     action: Vec<RouteItem>,
 }
 
-#[derive(Deserialize, Serialize)]
+#[derive(Deserialize)]
 struct HaikuReqBody {
-    user: String,
+    // user: String,
     state: String,
     text: Option<String>,
+    cursor: Option<String>,
     routes: Option<ForwardRoute>,
     forwards: Option<ForwardRoute>,
 }
@@ -237,6 +238,17 @@ async fn sites(req: Json<HaikuReqBody>) -> impl IntoResponse {
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
+#[derive(Deserialize)]
+struct Projects {
+    #[serde(rename = "maxResults")]
+    max_results: u32,
+    #[serde(rename = "startAt")]
+    start_at: u32,
+    #[serde(rename = "isLast")]
+    is_last: bool,
+    values: Vec<Object>,
+}
+
 async fn projects(req: Json<HaikuReqBody>) -> impl IntoResponse {
     let site = &req
         .routes
@@ -249,16 +261,17 @@ async fn projects(req: Json<HaikuReqBody>) -> impl IntoResponse {
 
     HTTP_CLIENT
         .get(format!(
-            "https://api.atlassian.com/ex/jira/{site}/rest/api/latest/project"
+            "https://api.atlassian.com/ex/jira/{site}/rest/api/3/project/search"
         ))
+        .query(&[("startAt", req.cursor.as_ref().unwrap_or(&"0".to_string()))])
         .bearer_auth(decrypt(&req.state))
         .send()
         .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-        .json::<Vec<Object>>()
+        .json::<Projects>()
         .await
         .map(|projects| {
-            let list = projects
+            let list = projects.values
                 .into_iter()
                 .map(|project| RouteItem {
                     field: project.name,
@@ -266,7 +279,11 @@ async fn projects(req: Json<HaikuReqBody>) -> impl IntoResponse {
                 })
                 .collect::<Vec<_>>();
 
-            Json(json!({ "list": list }))
+            Json(json!({
+                "list": list,
+                "cursor": (!projects.is_last)
+                    .then_some((projects.max_results + projects.start_at).to_string())
+            }))
         })
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
