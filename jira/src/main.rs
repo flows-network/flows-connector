@@ -9,7 +9,7 @@ use lazy_static::lazy_static;
 use magic_crypt::{new_magic_crypt, MagicCrypt256, MagicCryptTrait};
 use reqwest::{Client, ClientBuilder};
 use serde::{Deserialize, Serialize};
-use serde_json::json;
+use serde_json::{json, Value};
 use std::time::Duration;
 use std::{collections::HashMap, env};
 use std::{collections::HashSet, net::SocketAddr};
@@ -170,7 +170,7 @@ async fn refresh(req: Json<RefreshState>) -> impl IntoResponse {
                 StatusCode::OK,
                 Json(json!({
                     "access_state": encrypt(&at.access_token),
-                    "refresh_state": req.refresh_state
+                    "refresh_state": encrypt(&at.refresh_token)
                 })),
             )
         })
@@ -189,6 +189,9 @@ struct ForwardRoute {
 
     #[serde(default = "Vec::new")]
     project: Vec<RouteItem>,
+
+    #[serde(default = "Vec::new")]
+    action: Vec<RouteItem>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -273,13 +276,17 @@ async fn actions() -> impl IntoResponse {
         "list": [
             {
                 "field": "Create an issue",
-                "value": "create_issue",
+                "value": "create",
+            },
+            {
+                "field": "Update an issue",
+                "value": "update",
             }
         ]
     }))
 }
 
-async fn post_item(req: Json<HaikuReqBody>) -> impl IntoResponse {
+async fn post_issue(req: Json<HaikuReqBody>) -> impl IntoResponse {
     let text = req
         .text
         .as_ref()
@@ -302,33 +309,132 @@ async fn post_item(req: Json<HaikuReqBody>) -> impl IntoResponse {
         .ok_or((StatusCode::BAD_REQUEST, "Missing project item".to_string()))?
         .value;
 
+    match forwards
+        .action
+        .first()
+        .ok_or((StatusCode::BAD_REQUEST, "Missing action".to_string()))?
+        .value
+        .as_str()
+    {
+        "create" => create_issue(&decrypt(&req.state), site, project, text)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e)),
+        "update" => update_issue(&decrypt(&req.state), site, text)
+            .await
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e)),
+        _ => Err((StatusCode::BAD_REQUEST, "Invalid action".to_string())),
+    }
+}
+
+async fn create_issue(
+    access_token: &String,
+    site: &String,
+    project: &String,
+    text: &String,
+) -> Result<(), String> {
+    let mut fields =
+        serde_json::from_str::<HashMap<String, Value>>(&text).map_err(|e| e.to_string())?;
+
+    fields.extend(
+        [
+            ("project".to_string(), json!({ "id": project,})),
+            ("issuetype".to_string(), json!({ "id": "10001" })),
+        ]
+        .into_iter(),
+    );
+
     let resp = HTTP_CLIENT
         .post(format!(
             "https://api.atlassian.com/ex/jira/{site}/rest/api/latest/issue"
         ))
-        .bearer_auth(decrypt(&req.state))
-        .json(&json!({
-            "fields": {
-                "project": {
-                   "id": project
-                },
-                "summary": text,
-                //"description": "",
-                "issuetype": {
-                   "id": "10001"
-                }
-            }
-        }))
+        .bearer_auth(&access_token)
+        .json(&json!({ "fields": fields }))
         .send()
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
+        .map_err(|e| e.to_string())?;
 
     match resp.status().is_success() {
-        true => Ok(StatusCode::OK),
-        false => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            resp.text().await.unwrap_or_default(),
-        )),
+        true => Ok(()),
+        false => Err(resp.text().await.unwrap_or_default()),
+    }
+}
+
+#[derive(Deserialize)]
+struct Transitions {
+    transitions: Vec<Object>,
+}
+
+async fn get_transitions(
+    access_token: &String,
+    site: &String,
+    issue_key: &String,
+) -> Result<Transitions, String> {
+    HTTP_CLIENT
+        .get(format!(
+            "https://api.atlassian.com/ex/jira/{site}/rest/api/3/issue/{issue_key}/transitions",
+        ))
+        .bearer_auth(&access_token)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json::<Transitions>()
+        .await
+        .map_err(|e| e.to_string())
+}
+
+#[derive(Deserialize)]
+struct UpdateOutbound {
+    issue_key: String,
+    transition: Option<String>,
+
+    #[serde(flatten)]
+    fields: HashMap<String, Value>,
+}
+
+async fn update_issue(
+    access_token: &String, site: &String, text: &String
+) -> Result<(), String> {
+    let data = serde_json::from_str::<UpdateOutbound>(&text).map_err(|e| e.to_string())?;
+
+    let issue_url = format!(
+        "https://api.atlassian.com/ex/jira/{site}/rest/api/3/issue/{}",
+        data.issue_key
+    );
+
+    // Transition issue
+    if let Some(transition) = data.transition {
+        let id = get_transitions(&access_token, site, &data.issue_key)
+            .await?
+            .transitions
+            .into_iter()
+            .find(|trans| trans.name == transition)
+            .ok_or("Invaild transition".to_string())?
+            .id;
+
+        let resp = HTTP_CLIENT
+            .post(format!("{issue_url}/transitions"))
+            .bearer_auth(&access_token)
+            .json(&json!({ "transition": { "id": id } }))
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+
+        if !resp.status().is_success() {
+            return Err(resp.text().await.unwrap_or_default());
+        }
+    }
+
+    let resp = HTTP_CLIENT
+        .put(issue_url)
+        .bearer_auth(&access_token)
+        .json(&json!({ "fields": data.fields }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    match resp.status().is_success() {
+        true => Ok(()),
+        false => Err(resp.text().await.unwrap_or_default()),
     }
 }
 
@@ -341,7 +447,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/sites", post(sites))
         .route("/projects", post(projects))
         .route("/actions", post(actions))
-        .route("/post", post(post_item));
+        .route("/post", post(post_issue));
 
     let port = env::var("PORT")
         .unwrap_or_else(|_| "8090".to_string())
