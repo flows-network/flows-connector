@@ -345,23 +345,16 @@ async fn post_issue(req: Json<HaikuReqBody>) -> impl IntoResponse {
     }
 }
 
-#[derive(Deserialize)]
-struct CreateOutbound {
-    transition: Option<String>,
-
-    #[serde(flatten)]
-    fields: HashMap<String, Value>,
-}
-
 async fn create_issue(
     access_token: &String,
     site: &String,
     project: &String,
     text: &String,
 ) -> Result<(), String> {
-    let mut data = serde_json::from_str::<CreateOutbound>(&text).map_err(|e| e.to_string())?;
+    let mut fields =
+        serde_json::from_str::<HashMap<String, Value>>(&text).map_err(|e| e.to_string())?;
 
-    data.fields.extend(
+    fields.extend(
         [
             ("project".to_string(), json!({ "id": project,})),
             ("issuetype".to_string(), json!({ "id": "10001" })),
@@ -374,10 +367,7 @@ async fn create_issue(
             "https://api.atlassian.com/ex/jira/{site}/rest/api/latest/issue"
         ))
         .bearer_auth(&access_token)
-        .json(&json!({
-            "fields": data.fields,
-            "transition": data.transition.map(|t| json!({ "id": t }))
-        }))
+        .json(&json!({ "fields": fields }))
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -474,7 +464,7 @@ async fn update_issue(
             ]
         });
     }
-    
+
     let resp = HTTP_CLIENT
         .put(issue_url)
         .bearer_auth(&access_token)
