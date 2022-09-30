@@ -345,16 +345,23 @@ async fn post_issue(req: Json<HaikuReqBody>) -> impl IntoResponse {
     }
 }
 
+#[derive(Deserialize)]
+struct CreateOutbound {
+    transition: Option<String>,
+
+    #[serde(flatten)]
+    fields: HashMap<String, Value>,
+}
+
 async fn create_issue(
     access_token: &String,
     site: &String,
     project: &String,
     text: &String,
 ) -> Result<(), String> {
-    let mut fields =
-        serde_json::from_str::<HashMap<String, Value>>(&text).map_err(|e| e.to_string())?;
+    let mut data = serde_json::from_str::<CreateOutbound>(&text).map_err(|e| e.to_string())?;
 
-    fields.extend(
+    data.fields.extend(
         [
             ("project".to_string(), json!({ "id": project,})),
             ("issuetype".to_string(), json!({ "id": "10001" })),
@@ -367,7 +374,10 @@ async fn create_issue(
             "https://api.atlassian.com/ex/jira/{site}/rest/api/latest/issue"
         ))
         .bearer_auth(&access_token)
-        .json(&json!({ "fields": fields }))
+        .json(&json!({
+            "fields": data.fields,
+            "transition": data.transition.map(|t| json!({ "id": t }))
+        }))
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -413,7 +423,7 @@ struct UpdateOutbound {
 async fn update_issue(
     access_token: &String, site: &String, text: &String
 ) -> Result<(), String> {
-    let data = serde_json::from_str::<UpdateOutbound>(&text).map_err(|e| e.to_string())?;
+    let mut data = serde_json::from_str::<UpdateOutbound>(&text).map_err(|e| e.to_string())?;
 
     let issue_url = format!(
         "https://api.atlassian.com/ex/jira/{site}/rest/api/3/issue/{}",
@@ -443,6 +453,28 @@ async fn update_issue(
         }
     }
 
+    if let Some(description) = data.fields.get_mut("description") {
+        let desc = description
+            .as_str()
+            .ok_or("Invalid description".to_string())?;
+
+        *description = json!({
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [
+                        {
+                            "text": desc,
+                            "type": "text"
+                        }
+                    ]
+                }
+            ]
+        });
+    }
+    
     let resp = HTTP_CLIENT
         .put(issue_url)
         .bearer_auth(&access_token)
