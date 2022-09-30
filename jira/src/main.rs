@@ -183,8 +183,9 @@ struct RouteItem {
     value: String,
 }
 
-#[derive(Deserialize)]
-struct ForwardRoute {
+#[derive(Deserialize, Default)]
+struct Route {
+    #[serde(default = "Vec::new")]
     site: Vec<RouteItem>,
 
     #[serde(default = "Vec::new")]
@@ -200,8 +201,12 @@ struct HaikuReqBody {
     state: String,
     text: Option<String>,
     cursor: Option<String>,
-    routes: Option<ForwardRoute>,
-    forwards: Option<ForwardRoute>,
+
+    #[serde(default = "Route::default")]
+    routes: Route,
+
+    #[serde(default = "Route::default")]
+    forwards: Route,
 }
 
 #[derive(Deserialize)]
@@ -252,8 +257,6 @@ struct Projects {
 async fn projects(req: Json<HaikuReqBody>) -> impl IntoResponse {
     let site = &req
         .routes
-        .as_ref()
-        .ok_or((StatusCode::BAD_REQUEST, "Missing routes".to_string()))?
         .site
         .first()
         .ok_or((StatusCode::BAD_REQUEST, "Missing site item".to_string()))?
@@ -271,7 +274,8 @@ async fn projects(req: Json<HaikuReqBody>) -> impl IntoResponse {
         .json::<Projects>()
         .await
         .map(|projects| {
-            let list = projects.values
+            let list = projects
+                .values
                 .into_iter()
                 .map(|project| RouteItem {
                     field: project.name,
@@ -309,24 +313,22 @@ async fn post_issue(req: Json<HaikuReqBody>) -> impl IntoResponse {
         .as_ref()
         .ok_or((StatusCode::BAD_REQUEST, "Missing text".to_string()))?;
 
-    let forwards = req
+    let site = &req
         .forwards
-        .as_ref()
-        .ok_or((StatusCode::BAD_REQUEST, "Missing forwards".to_string()))?;
-
-    let site = &forwards
         .site
         .first()
         .ok_or((StatusCode::BAD_REQUEST, "Missing site item".to_string()))?
         .value;
 
-    let project = &forwards
+    let project = &req
+        .forwards
         .project
         .first()
         .ok_or((StatusCode::BAD_REQUEST, "Missing project item".to_string()))?
         .value;
 
-    match forwards
+    match req
+        .forwards
         .action
         .first()
         .ok_or((StatusCode::BAD_REQUEST, "Missing action".to_string()))?
