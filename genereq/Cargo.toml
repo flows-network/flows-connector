@@ -1,0 +1,20 @@
+[package]
+name = "genereq-connector"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+reqwest = { version = "0.11", features = ["json"] }
+axum = { version="0.5" }
+tokio = { version = "1", features = ["full"] }
+lazy_static = "1.4.0"
+hex = "0.4.0"
+urlencoding = "2.1.0"
+regex = "1.5"
+rsa = "0.6.0"
+rand = "0.8"
+base64 = "0.13.0"
