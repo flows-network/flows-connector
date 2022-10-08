@@ -71,10 +71,7 @@ async fn get_channels(access_token: &str, cursor: String) -> Result<Channels, St
                         // removed: account_inactive
                         // re-installed: invalid_auth
                         if f.error == "account_inactive" || f.error == "invalid_auth" {
-                            return Err(
-                                "The account is expired. Please authenticate your account again."
-                                    .to_string(),
-                            );
+                            return Err(r#"{"msg": "The account is expired. Please authenticate your account again."}"#.to_string());
                         };
                     }
                 }
@@ -84,5 +81,5 @@ async fn get_channels(access_token: &str, cursor: String) -> Result<Channels, St
             dbg!(e);
         }
     }
-    Err("Failed to get channels".to_string())
+    Err(r#"{"msg": "Failed to get channels"}"#.to_string())
 }
