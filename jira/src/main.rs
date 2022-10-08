@@ -7,12 +7,12 @@ use axum::{
 };
 use lazy_static::lazy_static;
 use magic_crypt::{new_magic_crypt, MagicCrypt256, MagicCryptTrait};
-use reqwest::{Client, ClientBuilder};
+use reqwest::{Client, ClientBuilder, Method, RequestBuilder};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
-use std::time::Duration;
 use std::{collections::HashMap, env};
 use std::{collections::HashSet, net::SocketAddr};
+use std::{fmt::Display, time::Duration};
 
 const TIMEOUT: u64 = 120;
 
@@ -33,7 +33,8 @@ lazy_static! {
     );
 
     static ref REDIRECT_URL: String = format!("{}/auth", &*SERVICE_API_PREFIX);
-    static ref SCOPES: &'static str = "read:me read:jira-work write:jira-work offline_access";
+    static ref SCOPES: &'static str =
+        "read:me read:jira-work write:jira-work manage:jira-webhook read:comment:jira read:issue-details:jira offline_access";
     static ref HTTP_CLIENT: Client = ClientBuilder::new()
         .timeout(Duration::from_secs(TIMEOUT))
         .build()
@@ -59,6 +60,13 @@ async fn connect() -> impl IntoResponse {
         urlencoding::encode(&*SCOPES)
     );
     (StatusCode::FOUND, [(header::LOCATION, location)])
+}
+
+fn jira_api<A: Display, S: Display>(method: Method, site: S, api: A) -> RequestBuilder {
+    HTTP_CLIENT.request(
+        method,
+        format!("https://api.atlassian.com/ex/jira/{site}/{api}"),
+    )
 }
 
 #[derive(Deserialize)]
@@ -177,14 +185,14 @@ async fn refresh(req: Json<RefreshState>) -> impl IntoResponse {
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
-#[derive(Deserialize, Serialize, Default)]
+#[derive(Deserialize, Serialize, Default, Debug)]
 struct RouteItem {
     field: String,
     value: String,
 }
 
-#[derive(Deserialize, Default)]
-struct Route {
+#[derive(Deserialize, Default, Debug)]
+struct Routes {
     #[serde(default = "Vec::new")]
     site: Vec<RouteItem>,
 
@@ -195,18 +203,18 @@ struct Route {
     action: Vec<RouteItem>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Debug)]
 struct HaikuReqBody {
     // user: String,
     state: String,
     text: Option<String>,
     cursor: Option<String>,
 
-    #[serde(default = "Route::default")]
-    routes: Route,
+    #[serde(default = "Routes::default")]
+    routes: Routes,
 
-    #[serde(default = "Route::default")]
-    forwards: Route,
+    #[serde(default = "Routes::default")]
+    forwards: Routes,
 }
 
 #[derive(Deserialize)]
@@ -262,10 +270,7 @@ async fn projects(req: Json<HaikuReqBody>) -> impl IntoResponse {
         .ok_or((StatusCode::BAD_REQUEST, "Missing site item".to_string()))?
         .value;
 
-    HTTP_CLIENT
-        .get(format!(
-            "https://api.atlassian.com/ex/jira/{site}/rest/api/3/project/search"
-        ))
+    jira_api(Method::GET, site, "/rest/api/3/project/search")
         .query(&[("startAt", req.cursor.as_ref().unwrap_or(&"0".to_string()))])
         .bearer_auth(decrypt(&req.state))
         .send()
@@ -362,10 +367,7 @@ async fn create_issue(
         .into_iter(),
     );
 
-    let resp = HTTP_CLIENT
-        .post(format!(
-            "https://api.atlassian.com/ex/jira/{site}/rest/api/latest/issue"
-        ))
+    let resp = jira_api(Method::POST, site, "/rest/api/latest/issue")
         .bearer_auth(&access_token)
         .json(&json!({ "fields": fields }))
         .send()
@@ -388,17 +390,18 @@ async fn get_transitions(
     site: &String,
     issue_key: &String,
 ) -> Result<Transitions, String> {
-    HTTP_CLIENT
-        .get(format!(
-            "https://api.atlassian.com/ex/jira/{site}/rest/api/3/issue/{issue_key}/transitions",
-        ))
-        .bearer_auth(&access_token)
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .json::<Transitions>()
-        .await
-        .map_err(|e| e.to_string())
+    jira_api(
+        Method::GET,
+        site,
+        format!("/rest/api/3/issue/{issue_key}/transitions"),
+    )
+    .bearer_auth(&access_token)
+    .send()
+    .await
+    .map_err(|e| e.to_string())?
+    .json::<Transitions>()
+    .await
+    .map_err(|e| e.to_string())
 }
 
 #[derive(Deserialize)]
@@ -410,15 +413,8 @@ struct UpdateOutbound {
     fields: HashMap<String, Value>,
 }
 
-async fn update_issue(
-    access_token: &String, site: &String, text: &String
-) -> Result<(), String> {
+async fn update_issue(access_token: &String, site: &String, text: &String) -> Result<(), String> {
     let mut data = serde_json::from_str::<UpdateOutbound>(&text).map_err(|e| e.to_string())?;
-
-    let issue_url = format!(
-        "https://api.atlassian.com/ex/jira/{site}/rest/api/3/issue/{}",
-        data.issue_key
-    );
 
     // Transition issue
     if let Some(transition) = data.transition {
@@ -430,13 +426,16 @@ async fn update_issue(
             .ok_or("Invaild transition".to_string())?
             .id;
 
-        let resp = HTTP_CLIENT
-            .post(format!("{issue_url}/transitions"))
-            .bearer_auth(&access_token)
-            .json(&json!({ "transition": { "id": id } }))
-            .send()
-            .await
-            .map_err(|e| e.to_string())?;
+        let resp = jira_api(
+            Method::PUT,
+            site,
+            format!("/rest/api/3/issue/{}", data.issue_key),
+        )
+        .bearer_auth(&access_token)
+        .json(&json!({ "transition": { "id": id } }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
 
         if !resp.status().is_success() {
             return Err(resp.text().await.unwrap_or_default());
@@ -465,10 +464,74 @@ async fn update_issue(
         });
     }
 
-    let resp = HTTP_CLIENT
-        .put(issue_url)
-        .bearer_auth(&access_token)
-        .json(&json!({ "fields": data.fields }))
+    let resp = jira_api(
+        Method::GET,
+        site,
+        format!("/rest/api/3/issue/{}", data.issue_key),
+    )
+    .bearer_auth(&access_token)
+    .json(&json!({ "fields": data.fields }))
+    .send()
+    .await
+    .map_err(|e| e.to_string())?;
+
+    match resp.status().is_success() {
+        true => Ok(()),
+        false => Err(resp.text().await.unwrap_or_default()),
+    }
+}
+
+#[derive(Deserialize, Debug)]
+struct Webhook {
+    id: u32,
+
+    #[serde(rename = "jqlFilter")]
+    jpl_filter: String,
+}
+
+#[derive(Deserialize, Debug)]
+struct Webhooks {
+    values: Vec<Webhook>,
+}
+
+async fn get_webhooks<A: AsRef<str>, S: AsRef<str>>(
+    access_token: A,
+    site: S,
+) -> Result<Vec<Webhook>, String> {
+    jira_api(Method::GET, site.as_ref(), "/rest/api/3/webhook")
+        .bearer_auth(access_token.as_ref())
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .json::<Webhooks>()
+        .await
+        .map(|ws| ws.values)
+        .map_err(|e| e.to_string())
+}
+
+async fn register_webhooks<A: AsRef<str>, S: AsRef<str>, P: Display>(
+    access_token: A,
+    site: S,
+    project: P
+) -> Result<(), String> {
+    let resp = jira_api(Method::POST, site.as_ref(), "/rest/api/3/webhook")
+        .bearer_auth(access_token.as_ref())
+        .json(&json!({
+            "webhooks": [
+                {
+                    "jqlFilter": format!("project = {project}"),
+                    "events": [
+                        "jira:issue_created",
+                        "jira:issue_updated",
+                        "jira:issue_closed",
+                        "comment_created",
+                        "comment_updated",
+                        "comment_closed"
+                    ]
+                }
+            ],
+            "url": format!("{}/webhook", &*SERVICE_API_PREFIX)
+        }))
         .send()
         .await
         .map_err(|e| e.to_string())?;
@@ -477,6 +540,107 @@ async fn update_issue(
         true => Ok(()),
         false => Err(resp.text().await.unwrap_or_default()),
     }
+}
+
+async fn refresh_webhooks<A: AsRef<str>, S: AsRef<str>>(
+    access_token: A,
+    site: S,
+    webhooks: Vec<u32>,
+) -> Result<(), String> {
+    let resp = jira_api(Method::PUT, site.as_ref(), "/rest/api/3/webhook/refresh")
+        .bearer_auth(access_token.as_ref())
+        .json(&json!({ "webhookIds": webhooks }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    match resp.status().is_success() {
+        true => Ok(()),
+        false => Err(resp.text().await.unwrap_or_default()),
+    }
+}
+
+async fn events(Json(req): Json<HaikuReqBody>) -> impl IntoResponse {
+    let access_token = decrypt(&req.state);
+    let site = match req.routes.site.first() {
+        Some(s) => &s.value,
+        None => return Err((StatusCode::BAD_REQUEST, "Missing site route".to_string())),
+    };
+
+    let project = &req
+        .routes
+        .project
+        .first()
+        .ok_or((StatusCode::BAD_REQUEST, "Missing project route".to_string()))?
+        .value;
+
+    let webhooks = get_webhooks(&access_token, site).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("get webhooks failed: {}", e),
+        )
+    })?;
+
+    if webhooks
+        .iter()
+        .find(|w| w.jpl_filter == format!("project = {project}"))
+        .is_some()
+    {
+        register_webhooks(&access_token, site, project).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("register webhooks failed: {}", e),
+            )
+        })?;
+    } else {
+        refresh_webhooks(
+            access_token,
+            site,
+            webhooks.into_iter().map(|w| w.id).collect(),
+        )
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("refresh webhooks failed: {}", e),
+            )
+        })?;
+    }
+
+    Ok(Json(json!({
+        "list": [
+            {
+                "field": "Issue created",
+                "value": "jira:issue_created",
+            },
+            {
+                "field": "Issue updated",
+                "value": "jira:issue_updated",
+            },
+            {
+                "field": "Issue deleted",
+                "value": "jira:issue_deleted",
+            },
+            {
+                "field": "Comment created",
+                "value": "comment_created",
+            },
+            {
+                "field": "Comment updated",
+                "value": "comment_updated",
+            },
+            {
+                "field": "Comment deleted",
+                "value": "comment_deleted",
+            }
+        ]
+    })))
+}
+
+async fn capture_event(req: Json<Value>) -> impl IntoResponse {
+    println!("{:#?}", req);
+
+    StatusCode::OK
 }
 
 #[tokio::main]
@@ -488,7 +652,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/sites", post(sites))
         .route("/projects", post(projects))
         .route("/actions", post(actions))
-        .route("/post", post(post_issue));
+        .route("/events", post(events))
+        .route("/post", post(post_issue))
+        .route("/webhook", post(capture_event));
 
     let port = env::var("PORT")
         .unwrap_or_else(|_| "8090".to_string())
