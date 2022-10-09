@@ -19,8 +19,8 @@ const TIMEOUT: u64 = 120;
 lazy_static! {
     static ref HAIKU_API_PREFIX: String =
         env::var("HAIKU_API_PREFIX").expect("Env variable HAIKU_API_PREFIX not set");
-    // static ref HAIKU_AUTH_TOKEN: String =
-    //     env::var("HAIKU_AUTH_TOKEN").expect("Env variable HAIKU_AUTH_TOKEN not set");
+    static ref HAIKU_AUTH_TOKEN: String =
+        env::var("HAIKU_AUTH_TOKEN").expect("Env variable HAIKU_AUTH_TOKEN not set");
     static ref JIRA_APP_CLIENT_ID: String =
         env::var("JIRA_APP_CLIENT_ID").expect("Env variable JIRA_APP_CLIENT_ID not set");
     static ref JIRA_APP_CLIENT_SECRET: String =
@@ -220,35 +220,42 @@ struct HaikuReqBody {
 #[derive(Deserialize)]
 struct Site {
     id: String,
+    url: String,
     name: String,
     scopes: HashSet<String>,
 }
 
-async fn sites(req: Json<HaikuReqBody>) -> impl IntoResponse {
+async fn get_sites<A: AsRef<str>>(access_token: A) -> Result<Vec<Site>, String> {
     HTTP_CLIENT
         .get("https://api.atlassian.com/oauth/token/accessible-resources")
-        .bearer_auth(decrypt(&req.state))
+        .bearer_auth(access_token.as_ref())
         .send()
         .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .map_err(|e| e.to_string())?
         .json::<Vec<Site>>()
+        .await
+        .map_err(|e| format!("get sites failed: {}", e.to_string()))
+}
+
+async fn sites(req: Json<HaikuReqBody>) -> impl IntoResponse {
+    get_sites(decrypt(&req.state))
         .await
         .map(|sites| {
             let list = sites
                 .into_iter()
                 .filter_map(|site| {
-                    site.scopes
-                        .contains("write:jira-work")
-                        .then_some(RouteItem {
-                            field: site.name,
-                            value: site.id,
-                        })
+                    (site.scopes.contains("write:jira-work")
+                        && site.scopes.contains("read:jira-work"))
+                    .then_some(RouteItem {
+                        field: site.name,
+                        value: site.id,
+                    })
                 })
                 .collect::<Vec<_>>();
 
             Json(json!({ "list": list }))
         })
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))
 }
 
 #[derive(Deserialize)]
@@ -512,7 +519,7 @@ async fn get_webhooks<A: AsRef<str>, S: AsRef<str>>(
 async fn register_webhooks<A: AsRef<str>, S: AsRef<str>, P: Display>(
     access_token: A,
     site: S,
-    project: P
+    project: P,
 ) -> Result<(), String> {
     let resp = jira_api(Method::POST, site.as_ref(), "/rest/api/3/webhook")
         .bearer_auth(access_token.as_ref())
@@ -523,10 +530,10 @@ async fn register_webhooks<A: AsRef<str>, S: AsRef<str>, P: Display>(
                     "events": [
                         "jira:issue_created",
                         "jira:issue_updated",
-                        "jira:issue_closed",
+                        "jira:issue_deleted",
                         "comment_created",
                         "comment_updated",
-                        "comment_closed"
+                        "comment_deleted"
                     ]
                 }
             ],
@@ -584,14 +591,16 @@ async fn events(Json(req): Json<HaikuReqBody>) -> impl IntoResponse {
     if webhooks
         .iter()
         .find(|w| w.jpl_filter == format!("project = {project}"))
-        .is_some()
+        .is_none()
     {
-        register_webhooks(&access_token, site, project).await.map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("register webhooks failed: {}", e),
-            )
-        })?;
+        register_webhooks(&access_token, site, project)
+            .await
+            .map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    format!("register webhooks failed: {}", e),
+                )
+            })?;
     } else {
         refresh_webhooks(
             access_token,
@@ -637,10 +646,93 @@ async fn events(Json(req): Json<HaikuReqBody>) -> impl IntoResponse {
     })))
 }
 
+async fn get_access_token_from_haiku<A: AsRef<str>>(account_id: A) -> Result<String, String> {
+    HTTP_CLIENT
+        .post(format!("{}/api/_funcs/_author_state", &*HAIKU_API_PREFIX))
+        .header(header::AUTHORIZATION, &*HAIKU_AUTH_TOKEN)
+        .json(&json!({ "author": account_id.as_ref() }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .text()
+        .await
+        .map(|at| decrypt(at))
+        .map_err(|e| format!("get access token from haiku failed: {}", e.to_string()))
+}
+
+async fn post_event_to_haiku<U: AsRef<str>, T: AsRef<str>>(
+    user: U,
+    text: T,
+    triggers: HashMap<&str, &str>,
+) -> Result<(), String> {
+    HTTP_CLIENT
+        .post(format!("{}/api/_funcs/_post", &*HAIKU_API_PREFIX))
+        .header(header::AUTHORIZATION, &*HAIKU_AUTH_TOKEN)
+        .json(&json!({
+            "user": user.as_ref(),
+            "text": text.as_ref(),
+            "triggers": triggers,
+        }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())
+        .and_then(|r| {
+            r.status()
+                .is_success()
+                .then_some(())
+                .ok_or(format!("Failed to post event to haiku: {:?}", r))
+        })
+}
+
 async fn capture_event(req: Json<Value>) -> impl IntoResponse {
-    println!("{:#?}", req);
+    if let Err(e) = capture_event_inner(&req).await {
+        println!("capture event failed: {}", e);
+    }
 
     StatusCode::OK
+}
+
+async fn capture_event_inner(payload: &Value) -> Result<(), String> {
+    let event = payload["webhookEvent"]
+        .as_str()
+        .ok_or("Missing webhookEvent".to_string())?;
+
+    let project = payload["issue"]["fields"]["project"]
+        .as_object()
+        .ok_or("Missing project".to_string())?;
+
+    let project_id = project["id"]
+        .as_str()
+        .ok_or("Missing project:id".to_string())?;
+
+    let project_url = project["self"]
+        .as_str()
+        .ok_or("Missing project:self".to_string())?;
+
+    let account_id = payload["user"]["accountId"]
+        .as_str()
+        .or_else(|| payload["comment"]["author"]["accountId"].as_str())
+        .ok_or("Missing accountId".to_string())?;
+
+    let site_id = get_sites(get_access_token_from_haiku(account_id).await?)
+        .await?
+        .into_iter()
+        .find(|site| project_url.contains(&site.url))
+        .ok_or("Mismatch site".to_string())?
+        .id;
+
+    post_event_to_haiku(
+        account_id,
+        payload.to_string(),
+        [
+            ("site", site_id.as_str()),
+            ("project", project_id),
+            ("event", event),
+        ]
+        .into_iter()
+        .collect(),
+    )
+    .await
 }
 
 #[tokio::main]
