@@ -1,4 +1,5 @@
 use axum::response::IntoResponse;
+use reqwest::StatusCode;
 use serde_json::Value;
 
 use crate::{models::Shortcut, utils::post_event_to_reactor};
@@ -15,4 +16,6 @@ pub async fn inter(s: String) -> impl IntoResponse {
         shortcut.channel.id,
         "shortcut".to_string(),
     ));
+
+    StatusCode::OK
 }
