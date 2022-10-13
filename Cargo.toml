@@ -16,4 +16,5 @@ members = [
     "jira",
     "telegram",
     "genereq",
+    "reminder",
 ]
