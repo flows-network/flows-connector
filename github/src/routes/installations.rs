@@ -1,5 +1,6 @@
 use axum::{response::IntoResponse, Json};
 
+use reqwest::StatusCode;
 use serde_json::Value;
 
 use crate::{
@@ -27,5 +28,4 @@ pub async fn installations(Json(body): Json<RouteReq>) -> impl IntoResponse {
         })
         .to_string()
     })
-    .map_err(|_| "failed to get installations".to_string())
 }

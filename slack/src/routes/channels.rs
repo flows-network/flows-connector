@@ -12,9 +12,8 @@ use crate::utils::decrypt;
 pub async fn route_channels(Json(body): Json<RouteReq>) -> impl IntoResponse {
     let access_token = decrypt(body.state.as_str());
     let cursor = body.cursor.unwrap_or_default();
-    match get_channels(&access_token, cursor).await {
-        Ok(mut chs) => {
-            let rs: Vec<Value> = chs
+    get_channels(&access_token, cursor).await.map(|mut chs| {
+        let rs: Vec<Value> = chs
 				.channels
 				.iter_mut()
 				.filter_map(|ch| {
@@ -35,24 +34,25 @@ pub async fn route_channels(Json(body): Json<RouteReq>) -> impl IntoResponse {
 					None
 				})
 				.collect();
-            let result = match chs.response_metadata.next_cursor.as_str() {
-                "" => {
-                    serde_json::json!({ "list": rs })
-                }
-                s => {
-                    serde_json::json!({
-                        "next_cursor": s,
-                        "list": rs
-                    })
-                }
-            };
-            Ok(Json(result))
-        }
-        Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
-    }
+        let result = match chs.response_metadata.next_cursor.as_str() {
+            "" => {
+                serde_json::json!({ "list": rs })
+            }
+            s => {
+                serde_json::json!({
+                    "next_cursor": s,
+                    "list": rs
+                })
+            }
+        };
+        Json(result)
+    })
 }
 
-async fn get_channels(access_token: &str, cursor: String) -> Result<Channels, String> {
+async fn get_channels(
+    access_token: &str,
+    cursor: String,
+) -> Result<Channels, (StatusCode, String)> {
     let response = HTTP_CLIENT
 		.get(format!("https://slack.com/api/conversations.list?limit={}&cursor={}&types=public_channel,private_channel,im", CHANNELS_PER_PAGE, cursor))
 		.bearer_auth(access_token)
@@ -71,10 +71,11 @@ async fn get_channels(access_token: &str, cursor: String) -> Result<Channels, St
                         // removed: account_inactive
                         // re-installed: invalid_auth
                         if f.error == "account_inactive" || f.error == "invalid_auth" {
-                            return Err(
+                            return Err((
+                                StatusCode::UNAUTHORIZED,
                                 "The account is expired. Please authenticate your account again."
                                     .to_string(),
-                            );
+                            ));
                         };
                     }
                 }
@@ -84,5 +85,8 @@ async fn get_channels(access_token: &str, cursor: String) -> Result<Channels, St
             dbg!(e);
         }
     }
-    Err("Failed to get channels".to_string())
+    Err((
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "Failed to get channels".to_string(),
+    ))
 }

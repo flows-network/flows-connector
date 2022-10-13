@@ -1,5 +1,5 @@
 use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
-use reqwest::header;
+use reqwest::{header, StatusCode};
 use serde_json::{json, Value};
 
 use crate::{
@@ -67,7 +67,7 @@ pub async fn get_access_token(code: &str) -> Result<AccessTokenBody, String> {
     }
 }
 
-pub async fn get_installations(token: &str) -> Result<Installations, String> {
+pub async fn get_installations(token: &str) -> Result<Installations, (StatusCode, String)> {
     let response = HTTP_CLIENT
         .get("https://api.github.com/user/installations")
         .header(header::ACCEPT, "application/vnd.github+json")
@@ -79,12 +79,22 @@ pub async fn get_installations(token: &str) -> Result<Installations, String> {
         .send()
         .await;
 
+    // TODO: UNAUTHORIZED
+
     match response {
         Ok(r) => {
             let installations = r.json::<Installations>().await;
-            installations.map_err(|_| "Failed to get installations".to_string())
+            installations.map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to get installations".to_string(),
+                )
+            })
         }
-        Err(_) => Err("Failed to get installations".to_string()),
+        Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to get installations".to_string(),
+        )),
     }
 }
 
