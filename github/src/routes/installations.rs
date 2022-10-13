@@ -1,6 +1,5 @@
 use axum::{response::IntoResponse, Json};
 
-use reqwest::StatusCode;
 use serde_json::Value;
 
 use crate::{
