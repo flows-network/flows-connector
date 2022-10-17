@@ -63,7 +63,8 @@ fn encrypt(data: &str) -> String {
                 PaddingScheme::new_pkcs1v15_encrypt(),
                 data.as_bytes(),
             )
-            .expect("failed to encrypt"),
+            .map_err(|e| println!("Failed to encrypt: {}", e.to_string()))
+            .unwrap_or_default()
     )
 }
 
@@ -74,9 +75,10 @@ fn decrypt(data: &str) -> String {
                 PaddingScheme::new_pkcs1v15_encrypt(),
                 &hex::decode(data).unwrap(),
             )
-            .expect("failed to decrypt"),
+            .map_err(|e| println!("Failed to decrypt: {}", e.to_string()))
+            .unwrap_or_default()
     )
-    .unwrap()
+    .unwrap_or_default()
 }
 
 async fn connect() -> impl IntoResponse {
