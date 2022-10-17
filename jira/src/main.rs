@@ -2,7 +2,7 @@ use axum::{
     extract::{Json, Query},
     http::{header, StatusCode},
     response::IntoResponse,
-    routing::{get, post},
+    routing::{delete, get, post},
     Router,
 };
 use lazy_static::lazy_static;
@@ -488,41 +488,35 @@ async fn update_issue(access_token: &String, site: &String, text: &String) -> Re
     }
 }
 
-#[derive(Deserialize, Debug)]
-struct Webhook {
+#[derive(Deserialize)]
+struct WebhookResults {
+    #[serde(rename = "webhookRegistrationResult")]
+    webhooks: Vec<WebhookResult>,
+}
+
+#[derive(Deserialize)]
+struct WebhookResult {
+    #[serde(rename = "createdWebhookId")]
     id: u32,
-
-    #[serde(rename = "jqlFilter")]
-    jpl_filter: String,
 }
 
-#[derive(Deserialize, Debug)]
-struct Webhooks {
-    values: Vec<Webhook>,
-}
+async fn create_hook(req: Json<HaikuReqBody>) -> impl IntoResponse {
+    let site = &req
+        .routes
+        .site
+        .first()
+        .ok_or((StatusCode::BAD_REQUEST, "Missing site route".to_string()))?
+        .value;
 
-async fn get_webhooks<A: AsRef<str>, S: AsRef<str>>(
-    access_token: A,
-    site: S,
-) -> Result<Vec<Webhook>, String> {
-    jira_api(Method::GET, site.as_ref(), "/rest/api/3/webhook")
-        .bearer_auth(access_token.as_ref())
-        .send()
-        .await
-        .map_err(|e| e.to_string())?
-        .json::<Webhooks>()
-        .await
-        .map(|ws| ws.values)
-        .map_err(|e| e.to_string())
-}
+    let project = &req
+        .routes
+        .project
+        .first()
+        .ok_or((StatusCode::BAD_REQUEST, "Missing project route".to_string()))?
+        .value;
 
-async fn register_webhooks<A: AsRef<str>, S: AsRef<str>, P: Display>(
-    access_token: A,
-    site: S,
-    project: P,
-) -> Result<(), String> {
-    let resp = jira_api(Method::POST, site.as_ref(), "/rest/api/3/webhook")
-        .bearer_auth(access_token.as_ref())
+    jira_api(Method::POST, site, "/rest/api/3/webhook")
+        .bearer_auth(decrypt(&req.state))
         .json(&json!({
             "webhooks": [
                 {
@@ -541,82 +535,57 @@ async fn register_webhooks<A: AsRef<str>, S: AsRef<str>, P: Display>(
         }))
         .send()
         .await
-        .map_err(|e| e.to_string())?;
-
-    match resp.status().is_success() {
-        true => Ok(()),
-        false => Err(resp.text().await.unwrap_or_default()),
-    }
-}
-
-async fn refresh_webhooks<A: AsRef<str>, S: AsRef<str>>(
-    access_token: A,
-    site: S,
-    webhooks: Vec<u32>,
-) -> Result<(), String> {
-    let resp = jira_api(Method::PUT, site.as_ref(), "/rest/api/3/webhook/refresh")
-        .bearer_auth(access_token.as_ref())
-        .json(&json!({ "webhookIds": webhooks }))
-        .send()
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .json::<WebhookResults>()
         .await
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .and_then(|hooks| {
+            let id = hooks
+                .webhooks
+                .first()
+                .ok_or((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Create webhook failed".to_string(),
+                ))?
+                .id;
 
-    match resp.status().is_success() {
-        true => Ok(()),
-        false => Err(resp.text().await.unwrap_or_default()),
-    }
+            let revoke = format!("{}/revoke-hook?hook_id={}", &*SERVICE_API_PREFIX, id);
+
+            Ok(Json(json!({ "revoke": revoke })))
+        })
 }
 
-async fn events(Json(req): Json<HaikuReqBody>) -> impl IntoResponse {
-    let access_token = decrypt(&req.state);
-    let site = match req.routes.site.first() {
-        Some(s) => &s.value,
-        None => return Err((StatusCode::BAD_REQUEST, "Missing site route".to_string())),
-    };
+#[derive(Deserialize)]
+struct RevokeHook {
+    hook_id: u32,
+}
 
-    let project = &req
+async fn revoke_hook(req: Json<HaikuReqBody>, hook: Query<RevokeHook>) -> impl IntoResponse {
+    let site = &req
         .routes
-        .project
+        .site
         .first()
-        .ok_or((StatusCode::BAD_REQUEST, "Missing project route".to_string()))?
+        .ok_or((StatusCode::BAD_REQUEST, "Missing site route".to_string()))?
         .value;
 
-    let webhooks = get_webhooks(&access_token, site).await.map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            format!("get webhooks failed: {}", e),
-        )
-    })?;
-
-    if webhooks
-        .iter()
-        .find(|w| w.jpl_filter == format!("project = {project}"))
-        .is_none()
-    {
-        register_webhooks(&access_token, site, project)
-            .await
-            .map_err(|e| {
-                (
-                    StatusCode::INTERNAL_SERVER_ERROR,
-                    format!("register webhooks failed: {}", e),
-                )
-            })?;
-    } else {
-        refresh_webhooks(
-            access_token,
-            site,
-            webhooks.into_iter().map(|w| w.id).collect(),
-        )
+    let resp = jira_api(Method::DELETE, site, "/rest/api/3/webhook")
+        .bearer_auth(decrypt(&req.state))
+        .json(&json!({ "webhookIds": [ hook.hook_id ] }))
+        .send()
         .await
-        .map_err(|e| {
-            (
-                StatusCode::INTERNAL_SERVER_ERROR,
-                format!("refresh webhooks failed: {}", e),
-            )
-        })?;
-    }
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
 
-    Ok(Json(json!({
+    match resp.status().is_success() {
+        true => Ok(()),
+        false => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            resp.text().await.unwrap_or_default(),
+        )),
+    }
+}
+
+async fn events() -> impl IntoResponse {
+    Json(json!({
         "list": [
             {
                 "field": "Issue created",
@@ -643,7 +612,7 @@ async fn events(Json(req): Json<HaikuReqBody>) -> impl IntoResponse {
                 "value": "comment_deleted",
             }
         ]
-    })))
+    }))
 }
 
 async fn get_access_token_from_haiku<A: AsRef<str>>(account_id: A) -> Result<String, String> {
@@ -746,6 +715,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/actions", post(actions))
         .route("/events", post(events))
         .route("/post", post(post_issue))
+        .route("/create-hook", post(create_hook))
+        .route("/revoke-hook", delete(revoke_hook))
         .route("/webhook", post(capture_event));
 
     let port = env::var("PORT")
