@@ -70,17 +70,6 @@ fn _decrypt(data: &str) -> String {
     .unwrap()
 }
 
-async fn connect() -> impl IntoResponse {
-    let location = format!(
-        "{}/api/connected?authorId={}&authorName={}&authorState={}",
-        HAIKU_API_PREFIX.as_str(),
-        encode("general_user"),
-        encode("General User"),
-        encrypt("")
-    );
-    (StatusCode::FOUND, [("Location", location)])
-}
-
 async fn schedules() -> impl IntoResponse {
     let schedules = json!({
         "list": [
@@ -121,11 +110,7 @@ struct HookBody {
 async fn hook(Json(hook_body): Json<HookBody>) -> impl IntoResponse {
     if hook_body.timestamp.is_some() && hook_body.flow.is_some() {
         let flow = hook_body.flow.unwrap();
-        tokio::spawn(post_event_to_haiku(
-            String::from("general_user"),
-            flow,
-            String::from("Beep beep beep!"),
-        ));
+        tokio::spawn(post_event_to_haiku(flow, String::from("Beep beep beep!")));
     }
 
     (
@@ -136,9 +121,8 @@ async fn hook(Json(hook_body): Json<HookBody>) -> impl IntoResponse {
     )
 }
 
-async fn post_event_to_haiku(user: String, flow: String, text: String) {
+async fn post_event_to_haiku(flow: String, text: String) {
     let request = json!({
-        "user": user,
         "flow": flow,
         "text": text,
         "triggers": {
@@ -157,7 +141,6 @@ async fn post_event_to_haiku(user: String, flow: String, text: String) {
 #[tokio::main]
 async fn main() {
     let app = Router::new()
-        .route("/connect", get(connect))
         .route("/hook", post(hook))
         .route("/schedules", post(schedules));
 
