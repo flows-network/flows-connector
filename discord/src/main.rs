@@ -64,7 +64,7 @@ fn encrypt(data: &str) -> String {
                 data.as_bytes(),
             )
             .map_err(|e| println!("Failed to encrypt: {}", e.to_string()))
-            .unwrap_or_default()
+            .unwrap_or_default(),
     )
 }
 
@@ -76,7 +76,7 @@ fn decrypt(data: &str) -> String {
                 &hex::decode(data).unwrap(),
             )
             .map_err(|e| println!("Failed to decrypt: {}", e.to_string()))
-            .unwrap_or_default()
+            .unwrap_or_default(),
     )
     .unwrap_or_default()
 }
@@ -204,6 +204,12 @@ struct HaikuReqBody {
     forwards: Routes,
 }
 
+#[derive(Deserialize)]
+struct OutboundData {
+    content: String,
+    reply_to: Option<Message>,
+}
+
 async fn post_msg(req: Json<HaikuReqBody>) -> impl IntoResponse {
     let channel_id = req
         .forwards
@@ -222,16 +228,24 @@ async fn post_msg(req: Json<HaikuReqBody>) -> impl IntoResponse {
             )
         })?;
 
-    let text = req
-        .text
-        .as_ref()
-        .ok_or((StatusCode::BAD_REQUEST, "Missing text".to_string()))?;
+    let data = serde_json::from_str::<OutboundData>(
+        &req.text
+            .as_ref()
+            .ok_or((StatusCode::BAD_REQUEST, "Missing text".to_string()))?,
+    )
+    .map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            format!("Invalid outbound data: {}", e.to_string()),
+        )
+    })?;
 
-    ChannelId(channel_id)
-        .say(&*API_CLIENT, text)
-        .await
-        .map(|_| StatusCode::OK)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    match data.reply_to {
+        Some(r) => r.reply(&*API_CLIENT, data.content).await,
+        None => ChannelId(channel_id).say(&*API_CLIENT, data.content).await,
+    }
+    .map(|_| StatusCode::OK)
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 #[derive(Deserialize)]
@@ -334,7 +348,7 @@ async fn actions() -> impl IntoResponse {
     Json(json!({
         "list": [
             {
-                "field": "To send a message",
+                "field": "To send or reply a message",
                 "value": "say"
             }
         ]
@@ -362,7 +376,7 @@ impl EventHandler for DiscordEventHandler {
 
         post_event_to_haiku(
             user,
-            msg.content,
+            serde_json::to_string(&msg).unwrap_or_default(),
             [
                 ("guild", guild_id.to_string()),
                 ("channel", msg.channel_id.to_string()),
