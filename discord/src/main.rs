@@ -34,6 +34,10 @@ lazy_static! {
         env::var("DISCORD_APP_CLIENT_ID").expect("Env variable DISCORD_APP_CLIENT_ID not set");
     static ref DISCORD_APP_CLIENT_SECRET: String = env::var("DISCORD_APP_CLIENT_SECRET")
         .expect("Env variable DISCORD_APP_CLIENT_SECRET not set");
+    static ref APPLICATION_ID: u64 = env::var("APPLICATION_ID")
+        .expect("Env variable APPLICATION_ID not set")
+        .parse()
+        .expect("Invalid application id");
     static ref SERVICE_API_PREFIX: String =
         env::var("SERVICE_API_PREFIX").expect("Env var SERVICE_API_PREFIX not set");
     static ref RSA_RAND_SEED: [u8; 32] = env::var("RSA_RAND_SEED")
@@ -337,8 +341,20 @@ async fn events() -> impl IntoResponse {
                 "value": (MessageType::Regular as u8).to_string(),
             },
             {
+                "field": "A message reply",
+                "value": (MessageType::InlineReply as u8).to_string(),
+            },
+            {
                 "field": "A member is joined a channel",
                 "value": (MessageType::MemberJoin as u8).to_string(),
+            },
+            {
+                "field": "The group name was modified by the author",
+                "value": (MessageType::GroupNameUpdate as u8).to_string(),
+            },
+            {
+                "field": "The group icon was modified by the author",
+                "value": (MessageType::GroupIconUpdate as u8).to_string(),
             }
         ]
     }))
@@ -348,7 +364,7 @@ async fn actions() -> impl IntoResponse {
     Json(json!({
         "list": [
             {
-                "field": "To send or reply a message",
+                "field": "To send or reply to a message",
                 "value": "say"
             }
         ]
@@ -360,6 +376,11 @@ struct DiscordEventHandler;
 #[async_trait]
 impl EventHandler for DiscordEventHandler {
     async fn message(&self, context: Context, msg: Message) {
+        // Ignore self-generated events
+        if msg.author.id == *APPLICATION_ID {
+            return;
+        }
+
         let guild_id = match msg.guild_id {
             Some(id) => id,
             None => return,
