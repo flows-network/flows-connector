@@ -32,12 +32,11 @@ lazy_static! {
         env::var("HAIKU_AUTH_TOKEN").expect("Env variable HAIKU_AUTH_TOKEN not set");
     static ref DISCORD_APP_CLIENT_ID: String =
         env::var("DISCORD_APP_CLIENT_ID").expect("Env variable DISCORD_APP_CLIENT_ID not set");
+    static ref DISCORD_APP_APPLICATION_ID: u64 = DISCORD_APP_CLIENT_ID
+        .parse()
+        .expect("Invalid DISCORD_APP_CLIENT_ID");
     static ref DISCORD_APP_CLIENT_SECRET: String = env::var("DISCORD_APP_CLIENT_SECRET")
         .expect("Env variable DISCORD_APP_CLIENT_SECRET not set");
-    static ref APPLICATION_ID: u64 = env::var("APPLICATION_ID")
-        .expect("Env variable APPLICATION_ID not set")
-        .parse()
-        .expect("Invalid application id");
     static ref SERVICE_API_PREFIX: String =
         env::var("SERVICE_API_PREFIX").expect("Env var SERVICE_API_PREFIX not set");
     static ref RSA_RAND_SEED: [u8; 32] = env::var("RSA_RAND_SEED")
@@ -377,7 +376,7 @@ struct DiscordEventHandler;
 impl EventHandler for DiscordEventHandler {
     async fn message(&self, context: Context, msg: Message) {
         // Ignore self-generated events
-        if msg.author.id == *APPLICATION_ID {
+        if msg.author.id == *DISCORD_APP_APPLICATION_ID {
             return;
         }
 
