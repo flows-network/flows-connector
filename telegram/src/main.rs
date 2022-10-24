@@ -95,6 +95,7 @@ async fn post_msg(req: Json<HaikuReqBody>) -> Result<(), (StatusCode, String)> {
 
     let response = match action.as_str() {
         "send" => bot_api(Method::POST, "/sendMessage"),
+        "edit" => bot_api(Method::POST, "/editMessageText"),
         "ban" => bot_api(Method::POST, "/banChatMember"),
         "unban" => bot_api(Method::POST, "/unbanChatMember"),
         _ => return Err((StatusCode::BAD_REQUEST, "Unsupported action".to_string())),
@@ -265,8 +266,12 @@ async fn actions() -> impl IntoResponse {
     Json(json!({
         "list": [
             {
-                "field": "Send a message to chat",
+                "field": "Send a text message",
                 "value": "send"
+            },
+            {
+                "field": "Edit a text message",
+                "value": "edit"
             },
             {
                 "field": "Ban a user in a chat",
