@@ -19,11 +19,12 @@ pub async fn auth(Query(auth_body): Query<AuthBody>) -> impl IntoResponse {
                     let authed_user = at.authed_user.unwrap();
                     match get_authed_user(&authed_user.access_token).await {
                         Ok(gu) => {
+                            let workspace = get_workspace(&authed_user.access_token).await?;
                             let location = format!(
                                 "{}/api/connected?authorId={}&authorName={}&authorState={}",
                                 REACTOR_API_PREFIX.as_str(),
                                 authed_user.id,
-                                encode(gu.as_str()),
+                                encode(format!("{}({})", gu.as_str(), workspace).as_str()),
                                 encrypt(at.access_token.unwrap().as_str())
                             );
                             Ok((StatusCode::FOUND, [("Location", location)]))
@@ -36,6 +37,46 @@ pub async fn auth(Query(auth_body): Query<AuthBody>) -> impl IntoResponse {
             }
             Err(err_msg) => Err((StatusCode::INTERNAL_SERVER_ERROR, err_msg)),
         }
+    }
+}
+
+async fn get_workspace(access_token: &str) -> Result<String, (StatusCode, String)> {
+    let response = HTTP_CLIENT
+        .post("https://slack.com/api/auth.test")
+        .bearer_auth(access_token)
+        .send()
+        .await;
+
+    match response {
+        Ok(r) => {
+            let data: Value = r.json().await.map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to get workspace (parse json)".to_string(),
+                )
+            })?;
+            let ok = data.get("ok").unwrap_or(&Value::Bool(false));
+            if ok.as_bool().ok_or((
+                StatusCode::INTERNAL_SERVER_ERROR,
+                "Failed to get workspace (parse ok)".to_string(),
+            ))? {
+                let url = data.get("url").unwrap().as_str().ok_or((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to get workspace (parse url)".to_string(),
+                ))?;
+                let workspace = url.chars().skip(8).take_while(|&c| c != '.').collect();
+                Ok(workspace)
+            } else {
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Failed to get workspace (slack denied)".to_string(),
+                ))
+            }
+        }
+        Err(_) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Failed to get workspace (network)".to_string(),
+        )),
     }
 }
 
