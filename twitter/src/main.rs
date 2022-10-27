@@ -3,57 +3,46 @@ use axum::{
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
-    Router
+    Router,
 };
-use oauth1::Token;
 use lazy_static::lazy_static;
+use oauth1::Token;
 use rand::SeedableRng;
 use rand_chacha::ChaCha8Rng;
-use reqwest::{Client, ClientBuilder, header};
+use reqwest::{header, Client, ClientBuilder};
 use rsa::{PaddingScheme, PublicKey, RsaPrivateKey, RsaPublicKey};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use std::{
-    collections::HashMap,
-    env,
-    net::SocketAddr,
-    time::Duration, borrow::Cow,
-};
+use serde_json::{json, Value};
+use std::{borrow::Cow, collections::HashMap, env, net::SocketAddr, time::Duration};
 
 const TIMEOUT: u64 = 120;
 
 const RSA_BITS: usize = 2048;
 
 lazy_static! {
-    static ref REACTOR_API_PREFIX: String =
-        env::var("REACTOR_API_PREFIX").expect("Env variable REACTOR_API_PREFIX not set");
-    static ref REACTOR_AUTH_TOKEN: String =
-        env::var("REACTOR_AUTH_TOKEN").expect("Env variable REACTOR_AUTH_TOKEN not set");
-    static ref CONNECTOR_DOMAIN: String = env::var("CONNECTOR_DOMAIN")
-        .expect("Env variable CONNECTOR_DOMAIN not set");       // eg. https://twitter.reactor.io or https://localhost:8090
-        
-    static ref TWITTER_APP_ID: String = env::var("TWITTER_APP_ID")
-        .expect("Env variable TWITTER_APP_ID not set");
+    static ref HAIKU_API_PREFIX: String =
+        env::var("HAIKU_API_PREFIX").expect("Env variable HAIKU_API_PREFIX not set");
+    static ref HAIKU_AUTH_TOKEN: String =
+        env::var("HAIKU_AUTH_TOKEN").expect("Env variable HAIKU_AUTH_TOKEN not set");
+    static ref SERVICE_API_PREFIX: String =
+        env::var("SERVICE_API_PREFIX").expect("Env variable SERVICE_API_PREFIX not set");
     static ref TWITTER_CONSUMER: Token<'static> = Token::new(
         env::var("TWITTER_CONSUMER_KEY").expect("Env variable TWITTER_CONSUMER_KEY not set"),
-        env::var("TWITTER_CONSUMER_SECRET").expect("Env variable TWITTER_CONSUMER_SECRET not set"));
-    static ref TWITTER_BEARER_TOKEN: String = env::var("TWITTER_BEADER_TOKEN")
-        .expect("Env variable TWITTER_BEADER_TOKEN not set");
-
-    static ref DEV_ACCESS_TOKEN: Token<'static> = Token::new(
-        env::var("ACCESS_TOKEN").expect("Env variable ACCESS_TOKEN not set"),
-        env::var("ACCESS_TOKEN_SECRET").expect("Env variable ACCESS_TOKEN_SECRET not set"));
-
-    static ref ACCESS_TOKEN: String = env::var("ACCESS_TOKEN")
-        .expect("Env variable ACCESS_TOKEN not set");           // Dev access token
-    static ref ACCESS_TOKEN_SECRET: String = env::var("ACCESS_TOKEN_SECRET")
-        .expect("Env variable ACCESS_TOKEN_SECRET not set");    // Dev access token secret
-
+        env::var("TWITTER_CONSUMER_SECRET").expect("Env variable TWITTER_CONSUMER_SECRET not set")
+    );
+    static ref TWITTER_BEARER_TOKEN: String =
+        env::var("TWITTER_BEARER_TOKEN").expect("Env variable TWITTER_BEARER_TOKEN not set");
+    static ref ACCESS_TOKEN: String =
+        env::var("ACCESS_TOKEN").expect("Env variable ACCESS_TOKEN not set");
+    static ref ACCESS_TOKEN_SECRET: String =
+        env::var("ACCESS_TOKEN_SECRET").expect("Env variable ACCESS_TOKEN_SECRET not set");
+    static ref ENV_NAME: String = env::var("ENV_NAME").expect("Env variable ENV_NAME not set");
     static ref RSA_RAND_SEED: [u8; 32] = env::var("RSA_RAND_SEED")
         .expect("Env variable RSA_RAND_SEED not set")
         .as_bytes()
         .try_into()
         .unwrap();
+    static ref DEV_ACCESS_TOKEN: Token<'static> = Token::new(&*ACCESS_TOKEN, &*ACCESS_TOKEN_SECRET);
     static ref CHACHA8RNG: ChaCha8Rng = ChaCha8Rng::from_seed(*RSA_RAND_SEED);
     static ref PRIVATE_KEY: RsaPrivateKey =
         RsaPrivateKey::new(&mut CHACHA8RNG.clone(), RSA_BITS).expect("failed to generate a key");
@@ -88,33 +77,107 @@ fn decrypt(data: &str) -> String {
     .unwrap()
 }
 
+#[derive(Deserialize)]
+struct Session {
+    flows_auth_session: String,
+}
+
+async fn connect(query: Query<Session>) -> impl IntoResponse {
+    let params = [(
+        "oauth_callback",
+        format!(
+            "{}/auth?session_id={}",
+            *SERVICE_API_PREFIX, query.flows_auth_session
+        ),
+    )];
+
+    let tokens = HTTP_CLIENT
+        .post("https://api.twitter.com/oauth/request_token")
+        .query(&params)
+        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
+        .header(
+            header::AUTHORIZATION,
+            oauth1::authorize(
+                "POST",
+                "https://api.twitter.com/oauth/request_token",
+                &*TWITTER_CONSUMER,
+                None,
+                Some(
+                    params
+                        .into_iter()
+                        .map(|item| (item.0, Cow::from(item.1)))
+                        .collect(),
+                ),
+            ),
+        )
+        .send()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .bytes()
+        .await
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .and_then(|b| {
+            serde_urlencoded::from_bytes::<AuthBody>(&b)
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        })?;
+
+    if tokens.oauth_token.is_empty() {
+        return Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Parse OAuth body failed".to_string(),
+        ));
+    }
+
+    let location = format!(
+        "https://api.twitter.com/oauth/authorize?oauth_token={}",
+        tokens.oauth_token
+    );
+
+    Ok((StatusCode::FOUND, [("Location", location)]))
+}
+
 #[derive(Serialize, Deserialize)]
 struct AuthBody {
     oauth_token: String,
     oauth_token_secret: Option<String>,
     oauth_verifier: Option<String>,
+    session_id: Option<String>,
 }
 
 async fn auth(req: Query<AuthBody>) -> impl IntoResponse {
     if req.oauth_token.is_empty() || req.oauth_verifier.is_none() {
-        return Err((StatusCode::BAD_REQUEST, "Missing oauth_token or oauth_verifier".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Missing oauth_token or oauth_verifier".to_string(),
+        ));
     }
 
-    let at = get_access_token(&req).await
+    let at = get_access_token(&req)
+        .await
+        .map_err(|e| (StatusCode::UNAUTHORIZED, e))?;
+
+    let person = get_authed_user(&at)
+        .await
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-    let person = get_authed_user(&at).await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
-
-    let location = format!(
-        "{}/api/connected?authorId={}&authorName={}&authorState={}",
-        REACTOR_API_PREFIX.as_str(),
-        person.id,
-        urlencoding::encode(&person.name),
+    post_authorized_state(
+        req.session_id
+            .as_ref()
+            .ok_or((StatusCode::BAD_REQUEST, "Missing session_id".to_string()))?,
+        &person.id,
+        &person.name,
         encrypt(&serde_json::to_string(&at).unwrap()),
-    );
+    )
+    .await
+    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e))?;
 
-    Ok((StatusCode::OK, [("Location", location)]))
+    Ok((
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/html")],
+        "<body><script>
+            window.close();
+        </script></body>",
+    ))
 }
 
 async fn get_access_token(auth: &AuthBody) -> Result<AuthBody, String> {
@@ -133,8 +196,7 @@ async fn get_access_token(auth: &AuthBody) -> Result<AuthBody, String> {
         .await
         .map_err(|e| e.to_string())?;
 
-    let auth = serde_urlencoded::from_bytes::<AuthBody>(&body)
-        .map_err(|e| e.to_string())?;
+    let auth = serde_urlencoded::from_bytes::<AuthBody>(&body).map_err(|e| e.to_string())?;
 
     if auth.oauth_token.is_empty() || auth.oauth_token_secret.is_none() {
         return Err("Failed to get access token".to_string());
@@ -145,7 +207,7 @@ async fn get_access_token(auth: &AuthBody) -> Result<AuthBody, String> {
 
 #[derive(Deserialize)]
 struct User {
-    data: UserData
+    data: UserData,
 }
 
 #[derive(Deserialize)]
@@ -157,16 +219,22 @@ struct UserData {
 async fn get_authed_user(access_token: &AuthBody) -> Result<UserData, String> {
     HTTP_CLIENT
         .get("https://api.twitter.com/2/users/me")
-        .header(header::AUTHORIZATION,
-            oauth1::authorize("GET", "https://api.twitter.com/2/users/me",
-            &*TWITTER_CONSUMER,
-            Some(&Token::new(access_token.oauth_token.clone(), 
-                access_token.oauth_token_secret.clone().unwrap())),
-            None))
+        .header(
+            header::AUTHORIZATION,
+            oauth1::authorize(
+                "GET",
+                "https://api.twitter.com/2/users/me",
+                &*TWITTER_CONSUMER,
+                Some(&Token::new(
+                    access_token.oauth_token.clone(),
+                    access_token.oauth_token_secret.clone().unwrap(),
+                )),
+                None,
+            ),
+        )
         .send()
         .await
         .map_err(|_| "Failed to get user's profile".to_string())?
-
         .json::<User>()
         .await
         .map(|u| u.data)
@@ -185,60 +253,76 @@ async fn actions() -> impl IntoResponse {
     Json(events)
 }
 
-#[derive(Debug, Deserialize, Serialize)]
-struct ForwardRoute {
-    route: String,
+#[derive(Default, Deserialize)]
+struct RouteItem {
+    // field: String,
     value: String,
 }
 
+#[derive(Default, Deserialize)]
+struct Routes {
+    #[serde(default)]
+    action: Vec<RouteItem>,
+}
+
 #[derive(Deserialize)]
-struct ReactorBody {
+struct HaikuReqBody {
     user: String,
     state: String,
     text: Option<String>,
-    forwards: Vec<ForwardRoute>,
+    #[serde(default)]
+    forwards: Routes,
 }
 
-async fn post_msg(msg_body: Json<ReactorBody>) -> impl IntoResponse {
-    let routes = msg_body
+async fn post_msg(req: Json<HaikuReqBody>) -> impl IntoResponse {
+    let action = &req
         .forwards
-        .iter()
-        .map(|route| (route.route.clone(), route.value.clone()))
-        .collect::<HashMap<String, String>>();
+        .action
+        .first()
+        .ok_or((StatusCode::BAD_REQUEST, "Missing action item".to_string()))?
+        .value;
 
-    let text = msg_body.text.clone()
+    let text = req
+        .text
+        .clone()
         .ok_or((StatusCode::BAD_REQUEST, "Missing text".to_string()))?;
 
-    let action = routes.get("action")
-        .ok_or((StatusCode::BAD_REQUEST, "Missing action".to_string()))?;
-
-    let auth = serde_json::from_str::<AuthBody>(&decrypt(&msg_body.state))
+    let auth = serde_json::from_str::<AuthBody>(&decrypt(&req.state))
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
     if auth.oauth_token.is_empty() || auth.oauth_token_secret.is_none() {
-        return Err((StatusCode::BAD_REQUEST,
-            "Missing oauth_token or oauth_token_secret".to_string()));
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "Missing oauth_token or oauth_token_secret".to_string(),
+        ));
     }
 
     match action.as_str() {
-        "create-tweet" => {
-            HTTP_CLIENT
-                .post("https://api.twitter.com/2/tweets")
-                .header(header::AUTHORIZATION,
-                    oauth1::authorize("POST",
+        "create-tweet" => HTTP_CLIENT
+            .post("https://api.twitter.com/2/tweets")
+            .header(
+                header::AUTHORIZATION,
+                oauth1::authorize(
+                    "POST",
                     "https://api.twitter.com/2/tweets",
                     &*TWITTER_CONSUMER,
-                    Some(&Token::new(auth.oauth_token, auth.oauth_token_secret.unwrap())),
-                    None))
-                .json(&serde_json::json!({
-                    "text": text
-                }))
-                .send()
-                .await
-
-                .map(|_| (StatusCode::OK, "OK".to_string()))
-                .map_err(|_| (StatusCode::INTERNAL_SERVER_ERROR, "Create tweet failed".to_string()))
-        }
+                    Some(&Token::new(
+                        auth.oauth_token,
+                        auth.oauth_token_secret.unwrap(),
+                    )),
+                    None,
+                ),
+            )
+            .json(&json!({ "text": text }))
+            .send()
+            .await
+            .map(|_| ())
+            .map_err(|_| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "Create tweet failed".to_string(),
+                )
+            }),
         _ => Err((StatusCode::BAD_REQUEST, "Unsupport action".to_string())),
     }
 }
@@ -249,52 +333,19 @@ struct CrcRequest {
 }
 
 async fn webhook_challenge(req: Query<CrcRequest>) -> impl IntoResponse {
-    let sha256_hash = hmac_sha256::HMAC::mac(
-        TWITTER_CONSUMER.secret.as_bytes(), req.crc_token.as_bytes());
+    let sha256_hash =
+        hmac_sha256::HMAC::mac(TWITTER_CONSUMER.secret.as_bytes(), req.crc_token.as_bytes());
 
-    (StatusCode::OK, Json(json!({
-         "response_token": format!("{}", base64::encode(&sha256_hash)),
-    })))
-}
-
-async fn login() -> impl IntoResponse {
-    let params = [("oauth_callback", format!("{}/auth", *CONNECTOR_DOMAIN))];
-
-    let body = HTTP_CLIENT
-        .post("https://api.twitter.com/oauth/request_token")
-        .query(&params)
-        .header(header::CONTENT_TYPE, "application/x-www-form-urlencoded")
-        .header(header::AUTHORIZATION,
-            oauth1::authorize("POST", 
-            "https://api.twitter.com/oauth/request_token",
-            &*TWITTER_CONSUMER, None, Some(
-                params
-                .into_iter()
-                .map(|item| (item.0, Cow::from(item.1))).collect())))
-        .send()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
-
-        .bytes()
-        .await
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    let tokens = serde_urlencoded::from_bytes::<AuthBody>(&body)
-        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?;
-
-    if tokens.oauth_token.is_empty() {
-        return Err((StatusCode::INTERNAL_SERVER_ERROR, "Parse OAuth body failed".to_string()));
-    }
-
-    let location = format!(
-        "https://api.twitter.com/oauth/authorize?oauth_token={}",
-        tokens.oauth_token);
-
-    Ok((StatusCode::FOUND, [("Location", location)]))
+    (
+        StatusCode::OK,
+        Json(json!({
+             "response_token": format!("{}", base64::encode(&sha256_hash)),
+        })),
+    )
 }
 
 #[allow(dead_code)]
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct Webhook {
     id: String,
     url: String,
@@ -313,87 +364,112 @@ struct Webhooks {
 }
 
 async fn fetch_webhooks() -> Result<Vec<Webhook>, Box<dyn std::error::Error>> {
-    let json = HTTP_CLIENT
+    let hooks = HTTP_CLIENT
         .get("https://api.twitter.com/1.1/account_activity/all/webhooks.json")
-        .bearer_auth(&*TWITTER_BEARER_TOKEN)
+        .header(
+            header::AUTHORIZATION,
+            oauth1::authorize(
+                "GET",
+                "https://api.twitter.com/1.1/account_activity/all/webhooks.json",
+                &*TWITTER_CONSUMER,
+                Some(&*DEV_ACCESS_TOKEN),
+                None,
+            ),
+        )
         .send()
         .await?
         .json::<Webhooks>()
         .await?;
 
-    let mut ret = Vec::new();
-
-    for env in json.environments {
-        for hook in env.webhooks {
-            ret.push(hook);
-        }
-    }
-
-    Ok(ret)
+    Ok(hooks
+        .environments
+        .iter()
+        .map(|e| e.webhooks.clone())
+        .flatten()
+        .collect::<Vec<Webhook>>())
 }
 
 async fn register_webhook() -> Result<Webhook, Box<dyn std::error::Error>> {
     let url = format!(
         "https://api.twitter.com/1.1/account_activity/all/{}/webhooks.json",
-        *TWITTER_APP_ID);
+        *ENV_NAME
+    );
 
-    let params = [("url", format!("{}/webhook", &*CONNECTOR_DOMAIN))];
+    let params = [("url", format!("{}/webhook", &*SERVICE_API_PREFIX))];
 
-    let response = HTTP_CLIENT
+    HTTP_CLIENT
         .post(url.clone())
         .query(&params)
-        .header(header::AUTHORIZATION,
-            oauth1::authorize("POST",
+        .header(
+            header::AUTHORIZATION,
+            oauth1::authorize(
+                "POST",
                 &url,
                 &*TWITTER_CONSUMER,
                 Some(&*DEV_ACCESS_TOKEN),
                 Some(
                     params
-                    .into_iter()
-                    .map(|item| (item.0, Cow::from(item.1))).collect())))
+                        .into_iter()
+                        .map(|item| (item.0, Cow::from(item.1)))
+                        .collect(),
+                ),
+            ),
+        )
         .send()
-        .await?;
-
-    Ok(response.json::<Webhook>().await?)
+        .await?
+        .json::<Webhook>()
+        .await
+        .map_err(Into::into)
 }
 
 async fn reenable_webhook(hook: &Webhook) -> Result<(), Box<dyn std::error::Error>> {
     let url = format!(
         "https://api.twitter.com/1.1/account_activity/all/{}/webhooks/{}.json",
-        *TWITTER_APP_ID, hook.id);
+        *ENV_NAME, hook.id
+    );
 
     HTTP_CLIENT
         .put(url.clone())
-        .header(header::AUTHORIZATION,
-            oauth1::authorize("PUT",
+        .header(
+            header::AUTHORIZATION,
+            oauth1::authorize(
+                "PUT",
                 &url,
                 &*TWITTER_CONSUMER,
                 Some(&*DEV_ACCESS_TOKEN),
-                None))
+                None,
+            ),
+        )
         .send()
         .await?;
 
     Ok(())
 }
 
-async fn init_webhook() -> Result<(), Box<dyn std::error::Error>> {
-    let hooks = fetch_webhooks().await?;
+async fn init_webhook() -> Result<(), String> {
+    let hooks = fetch_webhooks()
+        .await
+        .map_err(|e| format!("fetch_webhooks failed: {}", e.to_string()))?;
 
     let hook = if let Some(hook) = hooks.first() {
         if !hook.valid {
-            reenable_webhook(hook).await?;
+            reenable_webhook(hook)
+                .await
+                .map_err(|e| format!("reenable_webhook failed: {}", e.to_string()))?;
         }
         hooks.into_iter().next().unwrap()
     } else {
-        register_webhook().await?
+        register_webhook()
+            .await
+            .map_err(|e| format!("register_webhook failed: {}", e.to_string()))?
     };
 
-    println!("{:#?}", hook);
+    println!("init_webhook success:\n{:#?}", hook);
 
     Ok(())
 }
 
-async fn subscribe_events() -> impl IntoResponse {
+async fn events() -> impl IntoResponse {
     Json(json!({
         "list": [
             {
@@ -436,29 +512,38 @@ async fn subscribe_events() -> impl IntoResponse {
     }))
 }
 
-async fn subscribe(req: Json<ReactorBody>) -> impl IntoResponse {
+async fn subscribe(req: Json<HaikuReqBody>) -> impl IntoResponse {
     let url = format!(
         "https://api.twitter.com/1.1/account_activity/all/{}/subscriptions.json",
-        *TWITTER_APP_ID);
+        *ENV_NAME
+    );
 
     let auth = serde_json::from_str::<AuthBody>(&req.state)
         .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?;
 
     HTTP_CLIENT
         .post(url.clone())
-        .header(header::AUTHORIZATION,
-            oauth1::authorize("POST",
+        .header(
+            header::AUTHORIZATION,
+            oauth1::authorize(
+                "POST",
                 &url,
                 &*TWITTER_CONSUMER,
-                Some(&Token::new(auth.oauth_token,
-                    auth.oauth_token_secret.unwrap())),
-                None))
+                Some(&Token::new(
+                    auth.oauth_token,
+                    auth.oauth_token_secret.unwrap(),
+                )),
+                None,
+            ),
+        )
         .send()
         .await
-    .map(|_| (StatusCode::OK, Json(json!({
-        "revoke": format!("{}/unsubscribe?user_id={}", *CONNECTOR_DOMAIN, req.user),
-    }))))
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        .map(|_| {
+            Json(json!({
+                "revoke": format!("{}/unsubscribe?user_id={}", *SERVICE_API_PREFIX, req.user),
+            }))
+        })
+        .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 #[derive(Deserialize)]
@@ -467,69 +552,124 @@ struct UnsubscribeReq {
 }
 
 async fn unsubscribe(req: Json<UnsubscribeReq>) -> impl IntoResponse {
+    let url = format!(
+        "https://api.twitter.com/1.1/account_activity/all/{}/subscriptions/{}.json",
+        *ENV_NAME, req.user_id
+    );
+
     HTTP_CLIENT
-        .delete(format!(
-            "https://api.twitter.com/1.1/account_activity/all/{}/subscriptions/{}.json",
-            *TWITTER_APP_ID, req.user_id))
-        .bearer_auth(&*TWITTER_BEARER_TOKEN)
+        .delete(url.clone())
+        .header(
+            header::AUTHORIZATION,
+            oauth1::authorize(
+                "DELETE",
+                &url,
+                &*TWITTER_CONSUMER,
+                Some(&*DEV_ACCESS_TOKEN),
+                None,
+            ),
+        )
         .send()
         .await
         .map(|_| (StatusCode::OK, "OK".to_string()))
         .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
-async fn capture_event(req: Json<Value>) -> impl IntoResponse {
+#[derive(Deserialize)]
+#[allow(dead_code)]
+struct Payload {
+    for_user_id: String,
+    user_has_blocked: Option<bool>,
+
+    #[serde(flatten)]
+    extra: HashMap<String, Value>,
+}
+
+async fn capture_event(req: Json<Payload>) -> impl IntoResponse {
     tokio::spawn(async move {
         if let Err(e) = capture_event_inner(&req).await {
             println!("{}", e.to_string());
         }
     });
-    
+
     StatusCode::OK
 }
 
-async fn capture_event_inner(event: &Value) -> Result<(), Box<dyn std::error::Error>> {
-    let mut user_id = None;
-    let mut event_type = None;
-    let mut event_body = None;
+async fn capture_event_inner(payload: &Payload) -> Result<(), String> {
+    let event = payload
+        .extra
+        .iter()
+        .find(|(name, _)| name.as_str().ne("users"))
+        .ok_or("Invalid event".to_string())?
+        .0;
 
-    for item in event.as_object().ok_or("Parse event failed".to_string())? {
-        match item.0.as_str() {
-            "for_user_id" => user_id = Some(item.1.to_string()),
-            "user_has_blocked" => {},
-            other => {
-                event_type = Some(other.to_string());
-                event_body = Some(item.1);
-            },
-        }
-    }
-
-    Ok(post_event_to_haiku(user_id.ok_or("Missing for_user_id")?,
-        event_type.ok_or("Missing event")?,
-        event_body.ok_or("Missing event")?
-    ).await?)
+    post_event_to_haiku(
+        &payload.for_user_id,
+        event,
+        serde_json::to_string(&payload.extra).unwrap(),
+    )
+    .await
 }
 
-async fn post_event_to_haiku(
-    id: String,
-    event_type: String,
-    event_body: &Value,
-) -> Result<(), Box<dyn std::error::Error>> {
+async fn post_authorized_state<SE, I, N, ST>(
+    session_id: SE,
+    id: I,
+    name: N,
+    state: ST,
+) -> Result<(), String>
+where
+    SE: Into<String>,
+    I: Into<String>,
+    N: Into<String>,
+    ST: Into<String>,
+{
+    let response = HTTP_CLIENT
+        .post(format!(
+            "{}/api/_connectings/_authorized",
+            &*HAIKU_API_PREFIX
+        ))
+        .header(header::AUTHORIZATION, &*HAIKU_AUTH_TOKEN)
+        .json(&json!({
+            "sessionId": session_id.into(),
+            "authorId": id.into(),
+            "authorName": name.into(),
+            "authorState": state.into(),
+        }))
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+
+    match response.status().is_success() {
+        true => Ok(()),
+        false => Err(response.text().await.unwrap_or_default()),
+    }
+}
+
+async fn post_event_to_haiku<I: Into<String>, E: Into<String>, B: Into<String>>(
+    id: I,
+    event_type: E,
+    event_body: B,
+) -> Result<(), String> {
     let body = json!({
-        "user": id,
-        "text": event_body,
+        "user": id.into(),
+        "text": event_body.into(),
         "triggers": {
-            "event": event_type,
+            "event": event_type.into(),
         }
     });
 
-    Ok(HTTP_CLIENT
-        .post(format!("{}/api/_funcs/_post", *REACTOR_API_PREFIX))
-        .header(header::AUTHORIZATION, &*REACTOR_AUTH_TOKEN)
+    let response = HTTP_CLIENT
+        .post(format!("{}/api/_funcs/_post", *HAIKU_API_PREFIX))
+        .header(header::AUTHORIZATION, &*HAIKU_AUTH_TOKEN)
         .json(&body)
         .send()
         .await
-        .map(|_| ())?)
+        .map_err(|e| e.to_string())?;
+
+    match response.status().is_success() {
+        true => Ok(()),
+        false => Err(response.text().await.unwrap_or_default()),
+    }
 }
 
 #[tokio::main]
@@ -538,11 +678,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/auth", get(auth))
         .route("/actions", post(actions))
         .route("/post", post(post_msg))
-        .route("/login", get(login))
-        
-        .route("/webhook", get(webhook_challenge))
-        .route("/webhook", post(capture_event))
-        .route("/subscribe-events", post(subscribe_events))
+        .route("/connect", get(connect))
+        .route("/webhook", get(webhook_challenge).post(capture_event))
+        .route("/events", post(events))
         .route("/subscribe", get(subscribe))
         .route("/unsubscribe", get(unsubscribe));
 
@@ -550,11 +688,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = port.parse::<u16>().unwrap();
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
 
+    if let Err(e) = init_webhook().await {
+        eprintln!("init_webhook failed: {}", e);
+    }
+
     axum::Server::bind(&addr)
         .serve(app.into_make_service())
         .await?;
-
-    init_webhook().await?;
 
     Ok(())
 }
