@@ -92,12 +92,18 @@ pub struct InstallationTokenBody {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+pub struct InstRepoPerms {
+    pub admin: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
 pub struct InstRepo {
     pub node_id: String,
     pub name: String,
     pub full_name: String,
     pub html_url: String,
     pub hooks_url: String,
+    pub permissions: InstRepoPerms,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

@@ -22,25 +22,41 @@ pub async fn repos(Json(body): Json<RouteReq>) -> impl IntoResponse {
     if let Ok(page) = page.parse::<u32>() {
         match get_installed_repos(&auth_state.access_token, installation_id, page).await {
             Ok(irs) => {
+                let mut disabled_count = 0;
                 let rs: Vec<Value> = irs
                     .repositories
                     .iter()
                     .map(|ir| {
+                        if !ir.permissions.admin {
+                            disabled_count = disabled_count + 1;
+                        }
                         serde_json::json!({
                             "field": ir.full_name,
-                            "value": ir.node_id
+                            "value": ir.node_id,
+                            "disabled": !ir.permissions.admin
                         })
                     })
                     .collect();
+                let message = match disabled_count {
+                    0 => "",
+                    _ => {
+                        "Some Repos are disabled since you don't have permission to manage Webhooks"
+                    }
+                };
+
                 let result = match irs.total_count > page * REPOS_PER_PAGE {
                     true => {
                         serde_json::json!({
                             "next_cursor": page + 1,
+                            "message": message,
                             "list": rs
                         })
                     }
                     false => {
-                        serde_json::json!({ "list": rs })
+                        serde_json::json!({
+                            "message": message,
+                            "list": rs
+                        })
                     }
                 };
                 Ok(Json(result))
