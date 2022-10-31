@@ -194,6 +194,8 @@ struct Routes {
     guild: Vec<RouteItem>,
     #[serde(default = "Vec::new")]
     channel: Vec<RouteItem>,
+    #[serde(default = "Vec::new")]
+    action: Vec<RouteItem>,
 }
 
 #[derive(Deserialize)]
@@ -208,19 +210,45 @@ struct HaikuReqBody {
 }
 
 #[derive(Deserialize)]
-struct OutboundData {
+struct MessageBody {
     content: String,
     reply_to: Option<Message>,
 }
 
+#[derive(Deserialize)]
+struct BanBody {
+    user_id: String,
+    #[serde(default)]
+    reason: String,
+    #[serde(default)]
+    dmd: u8,
+}
+
 async fn post_msg(req: Json<HaikuReqBody>) -> impl IntoResponse {
+    let guild_id = req
+        .forwards
+        .guild
+        .first()
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "Invalid JSON data: Missing guild item".to_string(),
+        ))?
+        .value
+        .parse::<u64>()
+        .map_err(|e| {
+            (
+                StatusCode::BAD_REQUEST,
+                format!("Invalid guild id: {}", e.to_string()),
+            )
+        })?;
+
     let channel_id = req
         .forwards
         .channel
         .first()
         .ok_or((
             StatusCode::BAD_REQUEST,
-            "Invalid JSON data: Missing database".to_string(),
+            "Invalid JSON data: Missing channel item".to_string(),
         ))?
         .value
         .parse::<u64>()
@@ -231,24 +259,69 @@ async fn post_msg(req: Json<HaikuReqBody>) -> impl IntoResponse {
             )
         })?;
 
-    let data = serde_json::from_str::<OutboundData>(
-        &req.text
-            .as_ref()
-            .ok_or((StatusCode::BAD_REQUEST, "Missing text".to_string()))?,
-    )
-    .map_err(|e| {
-        (
+    let action = &req
+        .forwards
+        .action
+        .first()
+        .ok_or((
             StatusCode::BAD_REQUEST,
-            format!("Invalid outbound data: {}", e.to_string()),
-        )
-    })?;
+            "Invalid JSON data: Missing channel item".to_string(),
+        ))?
+        .value;
 
-    match data.reply_to {
-        Some(r) => r.reply(&*API_CLIENT, data.content).await,
-        None => ChannelId(channel_id).say(&*API_CLIENT, data.content).await,
+    let text = req
+        .text
+        .as_ref()
+        .ok_or((StatusCode::BAD_REQUEST, "Missing text".to_string()))?;
+
+    post_msg_inner(GuildId(guild_id), ChannelId(channel_id), text, action).await
+}
+
+async fn post_msg_inner(
+    guild_id: GuildId,
+    channel_id: ChannelId,
+    text: &String,
+    action: &String,
+) -> Result<(), (StatusCode, String)> {
+    match action.as_str() {
+        "say" => {
+            let data = serde_json::from_str::<MessageBody>(text).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid outbound data: {}", e.to_string()),
+                )
+            })?;
+
+            match data.reply_to {
+                Some(r) => r.reply(&*API_CLIENT, data.content).await,
+                None => channel_id.say(&*API_CLIENT, data.content).await,
+            }
+            .map(|_| ())
+            .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        }
+        "ban" => {
+            let data = serde_json::from_str::<BanBody>(text).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    format!("Invalid outbound data: {}", e.to_string()),
+                )
+            })?;
+
+            guild_id
+                .ban_with_reason(
+                    &*API_CLIENT,
+                    data.user_id
+                        .parse::<u64>()
+                        .map_err(|e| (StatusCode::BAD_REQUEST, e.to_string()))?,
+                    data.dmd,
+                    data.reason,
+                )
+                .await
+                .map(|_| ())
+                .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+        }
+        _ => Err((StatusCode::BAD_REQUEST, "Unsupported action".to_string())),
     }
-    .map(|_| StatusCode::OK)
-    .map_err(|e| (StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
 }
 
 #[derive(Deserialize)]
@@ -365,6 +438,10 @@ async fn actions() -> impl IntoResponse {
             {
                 "field": "To send or reply to a message",
                 "value": "say"
+            },
+            {
+                "field": "Create a guild ban",
+                "value": "ban"
             }
         ]
     }))
