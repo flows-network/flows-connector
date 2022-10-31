@@ -5,6 +5,11 @@ pub async fn actions() -> impl IntoResponse {
     let events = json!({
         "list": [
             {
+                "field": "To request a Pull Request review",
+                "value": "request-review",
+                "desc": "This connector takes the return value of the flow function to request a GitHub pull request review. It corresponds to the request-review call in the GitHub API."
+            },
+            {
                 "field": "To merge a Pull Request",
                 "value": "merge-pull",
                 "desc": "This connector takes the return value of the flow function to merge a GitHub pull request. It corresponds to the merge-pull call in the GitHub API."

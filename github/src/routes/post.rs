@@ -49,6 +49,24 @@ async fn post_meg_inner(
 ) -> Option<reqwest::RequestBuilder> {
     let api_base = format!("https://api.github.com/repos/{}", repo_name);
     match action {
+        "request-review" => {
+            let msg: Value = serde_json::from_str(msg_text).unwrap();
+            let pull_number = msg["pull_number"].as_u64().unwrap();
+
+            let default = vec![];
+            let reviewers = msg["reviewers"].as_array().unwrap_or(&default);
+            let team_reviewers = msg["team_reviewers"].as_array().unwrap_or(&default);
+            Some(
+                HTTP_CLIENT
+                    .post(format!(
+                        "{api_base}/pulls/{pull_number}/requested_reviewers"
+                    ))
+                    .json(&serde_json::json!({
+                        "reviewers": reviewers,
+                        "team_reviewers": team_reviewers,
+                    })),
+            )
+        }
         "merge-pull" => {
             let msg: Value = serde_json::from_str(msg_text).unwrap();
             let pull_number = msg["pull_number"].as_u64().unwrap();
@@ -63,7 +81,6 @@ async fn post_meg_inner(
             Some(
                 HTTP_CLIENT
                     .post(format!("{api_base}/issues"))
-                    .header(header::CONTENT_TYPE, "application/json")
                     .body(msg_text.to_string()),
             )
         }
