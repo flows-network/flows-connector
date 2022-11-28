@@ -1,6 +1,6 @@
-use axum::{response::IntoResponse, Json};
+use axum::response::IntoResponse;
 
-use codegen::action_gen;
+use codegen::actions_gen;
 
-#[action_gen("./github/codegen/openapi/api.github.com.json")]
+#[actions_gen("./github/codegen/openapi/api.github.com.json")]
 pub async fn actions() -> impl IntoResponse {}

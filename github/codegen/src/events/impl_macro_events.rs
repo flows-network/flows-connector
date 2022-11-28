@@ -1,15 +1,17 @@
 use std::{fs::File, io::Read};
 
-use openapiv3::{OpenAPI, Operation};
+use indexmap::IndexMap;
+use openapiv3::PathItem;
 use proc_macro::TokenStream;
 use proc_macro2::TokenStream as TokenStream2;
 use quote::{quote, ToTokens};
+use serde::Deserialize;
 use serde_json::Value;
 use syn::{AttributeArgs, ItemFn, Lit, NestedMeta};
 
 use crate::utils::find_return_type;
 
-pub fn impl_actions(target_fn: &ItemFn, args: &AttributeArgs) -> TokenStream {
+pub fn impl_events(target_fn: &ItemFn, args: &AttributeArgs) -> TokenStream {
     let return_ty = find_return_type(target_fn);
     let func_name_ident = target_fn.sig.ident.to_token_stream();
     let api_ident = if !args.is_empty() {
@@ -60,11 +62,13 @@ pub fn impl_actions(target_fn: &ItemFn, args: &AttributeArgs) -> TokenStream {
 }
 
 fn parse_json(json: &str) -> (TokenStream2, TokenStream2) {
-    let value: OpenAPI = serde_json::from_str(&json).expect("[codegen] json parse error");
+    let value: OpenAPIWithWebHook =
+        serde_json::from_str(&json).expect("[codegen] json parse error");
 
     let kv: Vec<Value> = value
-        .operations()
-        .filter_map(|(_, _, operation)| gen_json_res(operation))
+        .webhooks
+        .iter()
+        .filter_map(|(_, path_item)| gen_json_res(path_item))
         .collect();
 
     let total_count = kv.len();
@@ -104,7 +108,8 @@ fn parse_json(json: &str) -> (TokenStream2, TokenStream2) {
     )
 }
 
-fn gen_json_res(operation: &Operation) -> Option<Value> {
+fn gen_json_res(path_item: &PathItem) -> Option<Value> {
+    let operation = path_item.post.as_ref().unwrap();
     if let (Some(field), Some(value), Some(desc)) = (
         operation.summary.as_ref(),
         operation.operation_id.as_ref(),
@@ -118,4 +123,13 @@ fn gen_json_res(operation: &Operation) -> Option<Value> {
     } else {
         None
     }
+}
+
+#[derive(Debug, Clone, Deserialize, Default, PartialEq)]
+struct OpenAPIWithWebHook {
+    #[serde(rename = "x-webhooks")]
+    webhooks: IndexMap<String, PathItem>,
+
+    // #[serde(flatten)]
+    // openapi: OpenAPI,
 }
