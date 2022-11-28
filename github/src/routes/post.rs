@@ -7,7 +7,9 @@ use crate::{
 use axum::Json;
 use itertools::iproduct;
 
-use reqwest::{header, StatusCode};
+use codegen::reqs_gen;
+
+use reqwest::{header, Client, RequestBuilder, StatusCode};
 use serde_json::Value;
 
 use crate::global::HTTP_CLIENT;
@@ -36,7 +38,7 @@ pub async fn post_action(node_id: &str, action: &str, access_token: &str, msg_te
         let rb = post_meg_inner(repo_name, msg_text, access_token, action).await;
 
         if let Some(r) = rb {
-            _ = r.send().await
+            _ = r.send().await;
         }
     }
 }
@@ -47,83 +49,20 @@ async fn post_meg_inner(
     access_token: &str,
     action: &str,
 ) -> Option<reqwest::RequestBuilder> {
-    let api_base = format!("https://api.github.com/repos/{}", repo_name);
-    match action {
-        "request-review" => {
-            let msg: Value = serde_json::from_str(msg_text).unwrap();
-            let pull_number = msg["pull_number"].as_u64().unwrap();
+    let mut msg: Value = serde_json::from_str(msg_text).unwrap();
 
-            let default = vec![];
-            let reviewers = msg["reviewers"].as_array().unwrap_or(&default);
-            let team_reviewers = msg["team_reviewers"].as_array().unwrap_or(&default);
-            Some(
-                HTTP_CLIENT
-                    .post(format!(
-                        "{api_base}/pulls/{pull_number}/requested_reviewers"
-                    ))
-                    .json(&serde_json::json!({
-                        "reviewers": reviewers,
-                        "team_reviewers": team_reviewers,
-                    })),
-            )
-        }
-        "merge-pull" => {
-            let msg: Value = serde_json::from_str(msg_text).unwrap();
-            let pull_number = msg["pull_number"].as_u64().unwrap();
-            Some(
-                HTTP_CLIENT
-                    .post(format!("{api_base}/pulls/{pull_number}/merge"))
-                    .header(header::CONTENT_TYPE, "application/vnd.github+json"),
-            )
-        }
-        "create-issue" => {
-            // The outbound data and format are the same as the GitHub API, so pass them directly here
-            Some(
-                HTTP_CLIENT
-                    .post(format!("{api_base}/issues"))
-                    .body(msg_text.to_string()),
-            )
-        }
-        // shared by issue & pr
-        "create-comment" => {
-            let msg: Value = serde_json::from_str(msg_text).unwrap();
-            let issue_number = msg["issue_number"].as_u64().unwrap();
-            let body = msg["body"].as_str().unwrap();
-            Some(
-                HTTP_CLIENT
-                    .post(format!("{api_base}/issues/{issue_number}/comments"))
-                    .json(&serde_json::json!({
-                        "body": body,
-                    })),
-            )
-        }
-        "add-labels" => {
-            let msg: Value = serde_json::from_str(msg_text).unwrap();
-            let issue_number = msg["issue_number"].as_u64().unwrap();
-            let labels = msg["labels"].as_array().unwrap();
-            Some(
-                HTTP_CLIENT
-                    .post(format!("{api_base}/issues/{}/labels", issue_number))
-                    .json(&serde_json::json!({
-                        "labels": labels,
-                    })),
-            )
-        }
-        "add-assignees" => {
-            let msg: Value = serde_json::from_str(msg_text).unwrap();
-            let issue_number = msg["issue_number"].as_u64().unwrap();
-            let assignees = msg["assignees"].as_array().unwrap();
-            Some(
-                HTTP_CLIENT
-                    .post(format!("{api_base}/issues/{}/assignees", issue_number))
-                    .json(&serde_json::json!({
-                        "assignees": assignees,
-                    })),
-            )
-        }
-        _ => None,
-    }
-    .map(|r| {
+    let mut rn = repo_name.split('/');
+    let name = rn.next().unwrap().to_string();
+    let repo = rn.next().unwrap().to_string();
+
+    let injection = serde_json::json!({
+        "repo": repo,
+        "owner": name,
+    });
+
+    merge(&mut msg, &injection);
+
+    build_builder(&*HTTP_CLIENT, action, msg).map(|r| {
         r.header(header::ACCEPT, "application/vnd.github.v3+json")
             .header(
                 header::USER_AGENT,
@@ -131,4 +70,20 @@ async fn post_meg_inner(
             )
             .bearer_auth(access_token)
     })
+}
+
+#[reqs_gen("./github/codegen/openapi/api.github.com.json")]
+fn build_builder(client: &Client, action: &str, msg: serde_json::Value) -> Option<RequestBuilder> {}
+
+fn merge(a: &mut Value, b: &Value) {
+    match (a, b) {
+        (&mut Value::Object(ref mut a), &Value::Object(ref b)) => {
+            for (k, v) in b {
+                merge(a.entry(k.clone()).or_insert(Value::Null), v);
+            }
+        }
+        (a, b) => {
+            *a = b.clone();
+        }
+    }
 }
